@@ -2,8 +2,9 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CollectorRegistry } from '../core/collector-registry.js';
-import { HeartbeatScheduler, TaskPollScheduler } from '../core/scheduler.js';
+import { HeartbeatScheduler, TaskPollScheduler, UploadScheduler } from '../core/scheduler.js';
 import { TaskRunner } from '../core/task-runner.js';
+import { ResultUploader } from '../transport/result-uploader.js';
 
 async function writeStatus(statusPath, status) {
   await mkdir(path.dirname(statusPath), { recursive: true, mode: 0o700 });
@@ -31,6 +32,8 @@ export class AgentRuntime {
     registry,
     taskRunner,
     onResult,
+    resultStore,
+    resultUploader,
     cwd = process.cwd(),
   }) {
     this.config = config;
@@ -41,12 +44,23 @@ export class AgentRuntime {
     this.startedAt = Date.now();
     this.statusPath = path.resolve(cwd, config.storage.statusPath);
     this.persistChain = Promise.resolve();
+    this.resultStore = resultStore;
+    this.externalOnResult = onResult;
     this.registry = registry ?? new CollectorRegistry();
+    const uploadConfig = config.collectors.upload;
+    this.resultUploader = resultUploader ?? new ResultUploader({
+      resultStore,
+      apiClient,
+      identity,
+      logger,
+      uploadConcurrency: uploadConfig.uploadConcurrency,
+      maxPayloadWarningBytes: uploadConfig.maxPayloadWarningBytes,
+    });
     this.taskRunner = taskRunner ?? new TaskRunner({
       registry: this.registry,
       logger,
       collectorConfig: config.collectors,
-      onResult: onResult ?? ((result) => this.#handleResult(result)),
+      onResult: (result) => this.#handleResult(result),
     });
     this.health = {
       state: 'starting',
@@ -56,11 +70,15 @@ export class AgentRuntime {
       lastPollAt: null,
       lastPollError: null,
       lastTaskResult: null,
+      queueDepth: 0,
+      queueEvictedCount: 0,
+      queueLastEvictedAt: null,
     };
   }
 
   async start() {
     this.health.state = 'running';
+    await this.#refreshQueueHealth();
     await this.#persistHealth();
     const schedulerOptions = {
       initialRetryMs: this.config.retry.initialDelayMs,
@@ -77,8 +95,14 @@ export class AgentRuntime {
       intervalMs: this.config.agent.pollIntervalMs,
       ...schedulerOptions,
     });
+    this.uploadScheduler = new UploadScheduler({
+      uploadResults: (signal) => this.#uploadResults(signal),
+      intervalMs: this.config.collectors.upload.intervalMs,
+      ...schedulerOptions,
+    });
     this.heartbeatScheduler.start();
     this.taskPollScheduler.start();
+    this.uploadScheduler.start();
     this.logger.info({ agentId: this.identity.agentId }, 'Agent runtime started');
   }
 
@@ -87,6 +111,7 @@ export class AgentRuntime {
     await Promise.all([
       this.heartbeatScheduler?.stop(),
       this.taskPollScheduler?.stop(),
+      this.uploadScheduler?.stop(),
     ]);
     this.health.state = 'stopped';
     await this.#persistHealth();
@@ -98,13 +123,14 @@ export class AgentRuntime {
   }
 
   async #heartbeat() {
+    await this.#refreshQueueHealth();
     const payload = {
       agentId: this.identity.agentId,
       uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
       processUptimeSeconds: Math.floor(process.uptime()),
       hostname: os.hostname(),
       lastSuccessfulHeartbeat: this.health.lastHeartbeatAt,
-      currentQueueSize: 0,
+      currentQueueSize: this.health.queueDepth,
       agentVersion: this.version,
     };
     try {
@@ -137,15 +163,40 @@ export class AgentRuntime {
     }
   }
 
+  async #uploadResults(signal) {
+    const summary = await this.resultUploader.drain({ signal });
+    await this.#refreshQueueHealth();
+    await this.#persistHealth();
+    if (summary.attempted > 0) this.logger.debug({ upload: summary }, 'Result upload cycle completed');
+  }
+
   async #handleResult(result) {
+    if (!this.resultStore) throw new Error('Agent runtime requires a durable result store');
+    const queued = await this.resultStore.enqueue(result);
+    await this.#refreshQueueHealth();
     this.health.lastTaskResult = {
       taskId: result.taskId,
       collector: result.collector,
       status: result.status,
       finishedAt: result.finishedAt,
+      queueItemId: queued.id,
     };
     await this.#persistHealth();
-    this.logger.info({ result }, 'Collector result ready');
+    this.logger.info({
+      queueItemId: queued.id,
+      collector: result.collector,
+      status: result.status,
+      retained: queued.retained,
+    }, 'Collector result durably queued');
+    await this.externalOnResult?.(result, queued);
+  }
+
+  async #refreshQueueHealth() {
+    if (!this.resultStore) return;
+    const stats = await this.resultStore.getStats();
+    this.health.queueDepth = stats.pendingCount;
+    this.health.queueEvictedCount = stats.evictedCount;
+    this.health.queueLastEvictedAt = stats.lastEvictedAt;
   }
 
   #persistHealth() {

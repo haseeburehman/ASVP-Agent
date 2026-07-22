@@ -9,13 +9,14 @@ export const configSchema = {
     server: {
       type: 'object',
       additionalProperties: true,
-      required: ['mode', 'url', 'registrationPath', 'heartbeatPath', 'tasksPath', 'requestTimeoutMs'],
+      required: ['mode', 'url', 'registrationPath', 'heartbeatPath', 'tasksPath', 'resultsPath', 'requestTimeoutMs'],
       properties: {
         mode: { enum: ['mock', 'http'] },
         url: { type: 'string', minLength: 1 },
         registrationPath: { type: 'string', pattern: '^/' },
         heartbeatPath: { type: 'string', pattern: '^/' },
         tasksPath: { type: 'string', pattern: '^/' },
+        resultsPath: { type: 'string', pattern: '^/' },
         requestTimeoutMs: { type: 'integer', minimum: 1 },
       },
       allOf: [
@@ -38,10 +39,21 @@ export const configSchema = {
     storage: {
       type: 'object',
       additionalProperties: true,
-      required: ['identityPath', 'statusPath'],
+      required: [
+        'identityPath',
+        'statusPath',
+        'queueDir',
+        'maxQueueSizeBytes',
+        'maxQueueItems',
+        'maxItemAgeMs',
+      ],
       properties: {
         identityPath: { type: 'string', minLength: 1 },
         statusPath: { type: 'string', minLength: 1 },
+        queueDir: { type: 'string', minLength: 1 },
+        maxQueueSizeBytes: { type: 'integer', minimum: 1 },
+        maxQueueItems: { type: 'integer', minimum: 1 },
+        maxItemAgeMs: { type: 'integer', minimum: 1 },
       },
     },
     retry: {
@@ -90,6 +102,9 @@ export const configSchema = {
           nmapTimeoutMs: { type: 'integer', minimum: 1 },
           expiryWarningDays: { type: 'integer', minimum: 0 },
           commandTimeoutMs: { type: 'integer', minimum: 1 },
+          intervalMs: { type: 'integer', minimum: 100 },
+          uploadConcurrency: { type: 'integer', minimum: 1 },
+          maxPayloadWarningBytes: { type: 'integer', minimum: 1 },
         },
       },
     },

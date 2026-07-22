@@ -51,7 +51,9 @@ export class CredentialStore {
   }
 
   async saveIdentity(identity) {
-    if (!identity?.agentId || !identity?.authToken) throw new Error('Cannot persist an incomplete agent identity');
+    if (!identity?.agentId || !identity?.authToken || !identity?.encryptionKey) {
+      throw new Error('Cannot persist an incomplete agent identity');
+    }
     if (this.keychain) {
       try {
         await this.keychain.setPassword(serviceName, accountName, JSON.stringify(identity));

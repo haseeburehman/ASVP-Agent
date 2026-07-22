@@ -22,11 +22,15 @@ function serializeError(error) {
   };
 }
 
-export async function executeCollector({ collector, params = {}, context = {}, timeoutMs }) {
+export async function executeCollector({ collector, params = {}, context = {}, timeoutMs, signal }) {
   validateCollector(collector);
   const startedAt = new Date().toISOString();
   const abortController = new AbortController();
+  const externalAbortHandler = () => abortController.abort(signal?.reason);
   let timer;
+
+  if (signal?.aborted) abortController.abort(signal.reason);
+  else signal?.addEventListener('abort', externalAbortHandler, { once: true });
 
   try {
     const timeout = new Promise((_, reject) => {
@@ -58,6 +62,7 @@ export async function executeCollector({ collector, params = {}, context = {}, t
     };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', externalAbortHandler);
   }
 }
 

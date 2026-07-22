@@ -1,17 +1,26 @@
 import os from 'node:os';
 import { ApiClient, loadOrRegisterIdentity } from '../transport/api-client.js';
 import { CredentialStore } from '../security/credentials.js';
+import { ResultStore } from '../storage/result-store.js';
 import { AgentRuntime } from './runtime.js';
 import { createLogger, flushLogger } from '../utils/logger.js';
 
 export class AgentLifecycle {
-  constructor({ config, version, logger, apiClient, credentialStore, cwd = process.cwd() }) {
+  constructor({ config, version, logger, apiClient, credentialStore, resultStore, cwd = process.cwd() }) {
     this.config = config;
     this.version = version;
     this.logger = logger ?? createLogger({ level: config.agent.logLevel });
     this.apiClient = apiClient ?? new ApiClient({ config });
     this.credentialStore = credentialStore ?? new CredentialStore({
       identityPath: config.storage.identityPath,
+      logger: this.logger,
+      cwd,
+    });
+    this.resultStore = resultStore ?? new ResultStore({
+      queueDir: config.storage.queueDir,
+      maxQueueSizeBytes: config.storage.maxQueueSizeBytes,
+      maxQueueItems: config.storage.maxQueueItems,
+      maxItemAgeMs: config.storage.maxItemAgeMs,
       logger: this.logger,
       cwd,
     });
@@ -27,12 +36,18 @@ export class AgentLifecycle {
       metadata: { hostname: os.hostname(), platform: process.platform, architecture: process.arch },
     });
     this.logger.info({ agentId: identity.agentId, registered }, registered ? 'Agent registered' : 'Loaded existing agent identity');
+
+    await this.resultStore.initialize();
+    const recoveredCount = await this.resultStore.requeueStaleInFlight();
+    this.logger.info({ recoveredQueueItems: recoveredCount }, 'Result queue initialized and in-flight items recovered');
+
     this.runtime = new AgentRuntime({
       config: this.config,
       identity,
       apiClient: this.apiClient,
       logger: this.logger,
       version: this.version,
+      resultStore: this.resultStore,
       cwd: this.cwd,
     });
     this.#installSignalHandlers();

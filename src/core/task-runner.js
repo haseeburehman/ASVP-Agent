@@ -10,14 +10,14 @@ export class TaskRunner {
     this.limiters = new Map();
   }
 
-  async run(task) {
+  async run(task, { signal } = {}) {
     const collectorName = task?.collectorName ?? 'unknown';
     let definition;
     try {
       definition = this.registry.getDefinition(collectorName);
       if (!definition?.implemented) await this.registry.get(collectorName);
       const limiter = this.#getLimiter(collectorName, definition);
-      return await limiter(() => this.#execute(task, definition));
+      return await limiter(() => this.#execute(task, definition, signal));
     } catch (error) {
       const result = { taskId: task?.taskId ?? null, ...createFailureResult(collectorName, error) };
       await this.#handoff(result);
@@ -29,7 +29,7 @@ export class TaskRunner {
     return Promise.all(tasks.map((task) => this.run(task)));
   }
 
-  async #execute(task, definition) {
+  async #execute(task, definition, signal) {
     const collector = await this.registry.get(task.collectorName);
     const options = this.collectorConfig[task.collectorName] ?? {};
     const result = {
@@ -43,6 +43,7 @@ export class TaskRunner {
           collectorConfig: options,
         },
         timeoutMs: options.timeoutMs ?? definition.timeoutMs ?? 30000,
+        signal,
       }),
     };
     await this.#handoff(result);

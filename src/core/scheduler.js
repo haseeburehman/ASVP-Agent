@@ -35,7 +35,7 @@ export class RetryScheduler {
     let retryDelay = this.initialRetryMs;
     while (!signal.aborted) {
       try {
-        await this.operation();
+        await this.operation(signal);
         retryDelay = this.initialRetryMs;
         await sleep(this.intervalMs, signal);
       } catch (error) {
@@ -59,5 +59,11 @@ export class HeartbeatScheduler extends RetryScheduler {
 export class TaskPollScheduler extends RetryScheduler {
   constructor({ pollTasks, ...options }) {
     super({ operation: pollTasks, operationName: 'Task poll', ...options });
+  }
+}
+
+export class UploadScheduler extends RetryScheduler {
+  constructor({ uploadResults, ...options }) {
+    super({ operation: uploadResults, operationName: 'Result upload', ...options });
   }
 }

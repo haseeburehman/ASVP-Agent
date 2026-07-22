@@ -19,6 +19,7 @@ function createApiConfig() {
       registrationPath: '/register',
       heartbeatPath: '/heartbeat',
       tasksPath: '/tasks',
+      resultsPath: '/results',
       requestTimeoutMs: 1000,
     },
   };

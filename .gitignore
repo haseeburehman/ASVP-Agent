@@ -18,6 +18,7 @@ config/production.json
 # Runtime state and potentially sensitive scan data
 var/cache/*
 var/log/*
+var/queue/*
 var/*.json
 var/*.tmp
 !var/cache/.gitkeep

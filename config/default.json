@@ -1,10 +1,11 @@
 {
   "server": {
-    "mode": "mock",
-    "url": "mock://local-management-server",
+    "mode": "http",
+    "url": "https://management.example.invalid",
     "registrationPath": "/api/agents/register",
     "heartbeatPath": "/api/agents/heartbeat",
     "tasksPath": "/api/agents/tasks/poll",
+    "resultsPath": "/api/agents/results",
     "requestTimeoutMs": 10000
   },
   "agent": {
@@ -14,13 +15,22 @@
   },
   "storage": {
     "identityPath": "var/identity.json",
-    "statusPath": "var/status.json"
+    "statusPath": "var/status.json",
+    "queueDir": "var/queue",
+    "maxQueueSizeBytes": 524288000,
+    "maxQueueItems": 10000,
+    "maxItemAgeMs": 604800000
   },
   "retry": {
     "initialDelayMs": 1000,
     "maximumDelayMs": 30000
   },
   "collectors": {
+    "upload": {
+      "intervalMs": 15000,
+      "uploadConcurrency": 3,
+      "maxPayloadWarningBytes": 10485760
+    },
     "noop": {
       "timeoutMs": 5000,
       "concurrency": 2

@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { generateEncryptionKey } from '../security/crypto.js';
+
+export class ManagementHttpError extends Error {
+  constructor(status, message = `Management server returned HTTP ${status}`) {
+    super(message);
+    this.name = 'ManagementHttpError';
+    this.code = 'MANAGEMENT_HTTP_ERROR';
+    this.status = status;
+  }
+}
 
 export class MockManagementTransport {
-  constructor({ tasks } = {}) {
+  constructor({ tasks, uploadHandler } = {}) {
     this.tasks = tasks ?? [
       {
         taskId: 'mock-task-noop-001',
@@ -17,12 +27,15 @@ export class MockManagementTransport {
       },
     ];
     this.delivered = false;
+    this.uploadHandler = uploadHandler;
+    this.receivedUploads = [];
   }
 
   async register() {
     return {
       agentId: `mock-agent-${randomUUID()}`,
       authToken: `mock-token-${randomUUID()}`,
+      encryptionKey: generateEncryptionKey(),
     };
   }
 
@@ -35,6 +48,13 @@ export class MockManagementTransport {
     this.delivered = true;
     return structuredClone(this.tasks);
   }
+
+  async uploadResult(_pathname, payload, authToken, signal) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Upload aborted', 'AbortError');
+    if (this.uploadHandler) return this.uploadHandler(payload, authToken, signal);
+    this.receivedUploads.push(structuredClone(payload));
+    return { accepted: true, queueItemId: payload.queueItemId, receivedAt: new Date().toISOString() };
+  }
 }
 
 export class FetchManagementTransport {
@@ -43,16 +63,18 @@ export class FetchManagementTransport {
     this.requestTimeoutMs = requestTimeoutMs;
   }
 
-  async #post(pathname, body, authToken) {
+  async #post(pathname, body, authToken, signal) {
     const headers = { 'content-type': 'application/json' };
     if (authToken) headers.authorization = `Bearer ${authToken}`;
     const response = await fetch(new URL(pathname, this.baseUrl), {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
+        : AbortSignal.timeout(this.requestTimeoutMs),
     });
-    if (!response.ok) throw new Error(`Management server returned HTTP ${response.status}`);
+    if (!response.ok) throw new ManagementHttpError(response.status);
     return response.json();
   }
 
@@ -66,6 +88,10 @@ export class FetchManagementTransport {
 
   pollTasks(pathname, payload, authToken) {
     return this.#post(pathname, payload, authToken);
+  }
+
+  uploadResult(pathname, payload, authToken, signal) {
+    return this.#post(pathname, payload, authToken, signal);
   }
 }
 
@@ -88,6 +114,15 @@ export class ApiClient {
     return this.transport.heartbeat(this.config.server.heartbeatPath, status, identity.authToken);
   }
 
+  uploadResult(identity, payload, { signal } = {}) {
+    return this.transport.uploadResult(
+      this.config.server.resultsPath,
+      payload,
+      identity.authToken,
+      signal,
+    );
+  }
+
   async pollTasks(identity) {
     const response = await this.transport.pollTasks(
       this.config.server.tasksPath,
@@ -103,12 +138,14 @@ export class ApiClient {
 export async function loadOrRegisterIdentity({ credentialStore, apiClient, force = false, metadata = {} }) {
   if (!force) {
     const existing = await credentialStore.loadIdentity();
-    if (existing) return { identity: existing, registered: false };
+    if (existing?.agentId && existing?.authToken && existing?.encryptionKey) {
+      return { identity: existing, registered: false };
+    }
   }
 
   const identity = await apiClient.register(metadata);
-  if (!identity?.agentId || !identity?.authToken) {
-    throw new Error('Registration response did not include agentId and authToken');
+  if (!identity?.agentId || !identity?.authToken || !identity?.encryptionKey) {
+    throw new Error('Registration response did not include agentId, authToken, and encryptionKey');
   }
   await credentialStore.saveIdentity(identity);
   return { identity, registered: true };

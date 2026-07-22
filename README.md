@@ -120,3 +120,23 @@ Build one runtime API with explicit `start`, `stop`, and one-shot task boundarie
 - **Common installer:** expose future `service install`, `service uninstall`, and `service status` commands backed by small platform adapters. Generate no init scripts dynamically at runtime, require elevation only for installation, and run the agent itself with least privilege.
 
 See `docs/architecture.md` and `scripts/service/README.md` for the planned boundaries.
+
+## Manual collector testing
+
+The `scan` command creates a synthetic task and executes it through the same collector registry, timeout handling, authorization checks, and task runner used by polled tasks:
+
+```sh
+node ./bin/asvp-agent.js scan --collector os-info
+node ./bin/asvp-agent.js scan --collector apps --json
+node ./bin/asvp-agent.js scan --collector network-scan --target 10.0.0.10 --ports 22,80,443
+```
+
+On PowerShell systems that block `npm.ps1`, use `npm.cmd` for npm commands; direct `node` commands are unaffected.
+
+Remote collectors require explicit targets and those targets must be contained by the corresponding local `allowedCidrs`. There is no authorization override. Results are durably queued by default; use `--no-queue` only for deliberate developer checks where persistence is not wanted. Press `Ctrl+C` to abort an in-progress manual scan.
+
+## Result delivery
+
+The default configuration now uses real HTTPS transport (`server.mode: "http"`). Replace the placeholder `https://management.example.invalid` URL with the deployment's management endpoint before running the service. Local development and CI can explicitly select `server.mode: "mock"`.
+
+Pending queue results are serialized, gzip-compressed, and encrypted with AES-256-GCM immediately before upload. The encryption key is provisioned during registration and stored with the auth token through the OS keychain or restricted-file fallback. The server must explicitly acknowledge an upload with `{ "accepted": true, "queueItemId": "..." }` before the local item is marked delivered. Transient failures return items to pending; permanent payload-rejection HTTP responses mark them failed-permanent.

@@ -27,7 +27,8 @@ test('loads defaults, alternate config, and environment in precedence order', as
       loadDotEnv: false,
     });
 
-    assert.equal(config.server.mode, 'mock');
+    assert.equal(config.server.mode, 'http');
+    assert.equal(config.server.resultsPath, '/api/agents/results');
     assert.equal(config.agent.logLevel, 'debug');
     assert.equal(config.agent.heartbeatIntervalMs, 2500);
   });

@@ -18,7 +18,11 @@ function createApiClientMock() {
     get calls() { return calls; },
     async register() {
       calls += 1;
-      return { agentId: `agent-${calls}`, authToken: `token-${calls}` };
+      return {
+        agentId: `agent-${calls}`,
+        authToken: `token-${calls}`,
+        encryptionKey: Buffer.alloc(32, calls).toString('base64'),
+      };
     },
   };
 }
@@ -66,7 +70,7 @@ test('rejects incomplete registration responses without persisting them', async 
       credentialStore: store,
       apiClient: { async register() { return { agentId: 'missing-token' }; } },
     }),
-    /did not include agentId and authToken/,
+    /did not include agentId, authToken, and encryptionKey/,
   );
   assert.equal(await store.loadIdentity(), null);
 });
