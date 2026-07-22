@@ -18,7 +18,8 @@
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "p-limit": "^7.3.1",
-    "pino": "^10.3.1"
+    "pino": "^10.3.1",
+    "systeminformation": "^5.33.0"
   },
   "optionalDependencies": {
     "keytar": "^7.9.0"

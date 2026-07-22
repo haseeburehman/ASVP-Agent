@@ -5,7 +5,12 @@ const builtInDefinitions = {
     timeoutMs: 5000,
     concurrency: 2,
   },
-  'os-info': { modulePath: '../collectors/os-info/index.js', implemented: false },
+  'os-info': {
+    modulePath: '../collectors/os-info/index.js',
+    implemented: true,
+    timeoutMs: 10000,
+    concurrency: 1,
+  },
   apps: { modulePath: '../collectors/apps/index.js', implemented: false },
   'sca-deps': { modulePath: '../collectors/sca-deps/index.js', implemented: false },
   containers: { modulePath: '../collectors/containers/index.js', implemented: false },

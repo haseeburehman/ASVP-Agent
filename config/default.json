@@ -24,6 +24,10 @@
     "noop": {
       "timeoutMs": 5000,
       "concurrency": 2
+    },
+    "os-info": {
+      "timeoutMs": 10000,
+      "concurrency": 1
     }
   }
 }
