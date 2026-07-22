@@ -69,6 +69,8 @@ export const configSchema = {
           },
           maxDepth: { type: 'integer', minimum: 0 },
           maxManifests: { type: 'integer', minimum: 1 },
+          maxContainers: { type: 'integer', minimum: 1 },
+          maxPackagesPerContainer: { type: 'integer', minimum: 1 },
         },
       },
     },

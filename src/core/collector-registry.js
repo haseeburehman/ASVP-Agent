@@ -23,7 +23,12 @@ const builtInDefinitions = {
     timeoutMs: 30000,
     concurrency: 1,
   },
-  containers: { modulePath: '../collectors/containers/index.js', implemented: false },
+  containers: {
+    modulePath: '../collectors/containers/index.js',
+    implemented: true,
+    timeoutMs: 60000,
+    concurrency: 1,
+  },
   'network-scan': { modulePath: '../collectors/network-scan/index.js', implemented: false },
   'tls-checks': { modulePath: '../collectors/tls-checks/index.js', implemented: false },
   'compliance-checks': { modulePath: '../collectors/compliance-checks/index.js', implemented: false },

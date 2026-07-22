@@ -40,6 +40,12 @@
       "scanPaths": [],
       "maxDepth": 6,
       "maxManifests": 200
+    },
+    "containers": {
+      "timeoutMs": 60000,
+      "concurrency": 1,
+      "maxContainers": 20,
+      "maxPackagesPerContainer": 500
     }
   }
 }
