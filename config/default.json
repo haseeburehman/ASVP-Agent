@@ -46,6 +46,16 @@
       "concurrency": 1,
       "maxContainers": 20,
       "maxPackagesPerContainer": 500
+    },
+    "network-scan": {
+      "allowedCidrs": [],
+      "maxCidrSize": 16,
+      "allowWideRanges": false,
+      "maxConcurrentTargets": 5,
+      "maxPortsPerHost": 1000,
+      "perHostDelayMs": 100,
+      "perPortTimeoutMs": 1000,
+      "maxScanOperationsPerTask": 100000
     }
   }
 }
