@@ -4,10 +4,12 @@
     "url": "mock://local-management-server",
     "registrationPath": "/api/agents/register",
     "heartbeatPath": "/api/agents/heartbeat",
+    "tasksPath": "/api/agents/tasks/poll",
     "requestTimeoutMs": 10000
   },
   "agent": {
     "heartbeatIntervalMs": 30000,
+    "pollIntervalMs": 10000,
     "logLevel": "info"
   },
   "storage": {
@@ -17,5 +19,11 @@
   "retry": {
     "initialDelayMs": 1000,
     "maximumDelayMs": 30000
+  },
+  "collectors": {
+    "noop": {
+      "timeoutMs": 5000,
+      "concurrency": 2
+    }
   }
 }

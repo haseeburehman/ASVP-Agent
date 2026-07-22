@@ -1,7 +1,60 @@
-/**
- * Collector registry placeholder.
- *
- * Will discover approved collector modules, validate their contracts, apply
- * configuration, and resolve task collector names without coupling the core
- * runtime to individual collectors.
- */
+const builtInDefinitions = {
+  noop: {
+    modulePath: '../collectors/noop/index.js',
+    implemented: true,
+    timeoutMs: 5000,
+    concurrency: 2,
+  },
+  'os-info': { modulePath: '../collectors/os-info/index.js', implemented: false },
+  apps: { modulePath: '../collectors/apps/index.js', implemented: false },
+  'sca-deps': { modulePath: '../collectors/sca-deps/index.js', implemented: false },
+  containers: { modulePath: '../collectors/containers/index.js', implemented: false },
+  'network-scan': { modulePath: '../collectors/network-scan/index.js', implemented: false },
+  'tls-checks': { modulePath: '../collectors/tls-checks/index.js', implemented: false },
+  'compliance-checks': { modulePath: '../collectors/compliance-checks/index.js', implemented: false },
+};
+
+export class CollectorNotImplementedError extends Error {
+  constructor(name, allowlisted) {
+    super(allowlisted
+      ? `Collector "${name}" is allowlisted but not implemented`
+      : `Collector "${name}" is not registered or implemented`);
+    this.name = 'CollectorNotImplementedError';
+    this.code = 'COLLECTOR_NOT_IMPLEMENTED';
+  }
+}
+
+export class CollectorRegistry {
+  constructor({ definitions = builtInDefinitions, importer = (specifier) => import(specifier) } = {}) {
+    this.definitions = definitions;
+    this.importer = importer;
+    this.loaded = new Map();
+  }
+
+  has(name) {
+    return Object.hasOwn(this.definitions, name);
+  }
+
+  getDefinition(name) {
+    return this.definitions[name] ?? null;
+  }
+
+  async get(name) {
+    const definition = this.getDefinition(name);
+    if (!definition?.implemented) throw new CollectorNotImplementedError(name, Boolean(definition));
+    if (this.loaded.has(name)) return this.loaded.get(name);
+
+    const moduleUrl = new URL(definition.modulePath, import.meta.url);
+    const module = await this.importer(moduleUrl.href);
+    const collector = module.default ?? module.collector ?? module[`${name}Collector`];
+    if (!collector) throw new Error(`Collector module "${name}" does not export a collector`);
+    this.loaded.set(name, collector);
+    return collector;
+  }
+
+  list() {
+    return Object.entries(this.definitions).map(([name, definition]) => ({ name, ...definition }));
+  }
+}
+
+export { builtInDefinitions };

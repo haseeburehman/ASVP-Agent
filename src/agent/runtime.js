@@ -1,7 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { HeartbeatScheduler } from '../core/scheduler.js';
+import { CollectorRegistry } from '../core/collector-registry.js';
+import { HeartbeatScheduler, TaskPollScheduler } from '../core/scheduler.js';
+import { TaskRunner } from '../core/task-runner.js';
 
 async function writeStatus(statusPath, status) {
   await mkdir(path.dirname(statusPath), { recursive: true, mode: 0o700 });
@@ -20,7 +22,17 @@ export async function readStatus(statusPath) {
 }
 
 export class AgentRuntime {
-  constructor({ config, identity, apiClient, logger, version, cwd = process.cwd() }) {
+  constructor({
+    config,
+    identity,
+    apiClient,
+    logger,
+    version,
+    registry,
+    taskRunner,
+    onResult,
+    cwd = process.cwd(),
+  }) {
     this.config = config;
     this.identity = identity;
     this.apiClient = apiClient;
@@ -28,31 +40,54 @@ export class AgentRuntime {
     this.version = version;
     this.startedAt = Date.now();
     this.statusPath = path.resolve(cwd, config.storage.statusPath);
+    this.persistChain = Promise.resolve();
+    this.registry = registry ?? new CollectorRegistry();
+    this.taskRunner = taskRunner ?? new TaskRunner({
+      registry: this.registry,
+      logger,
+      collectorConfig: config.collectors,
+      onResult: onResult ?? ((result) => this.#handleResult(result)),
+    });
     this.health = {
       state: 'starting',
       agentId: identity.agentId,
       lastHeartbeatAt: null,
       lastHeartbeatError: null,
+      lastPollAt: null,
+      lastPollError: null,
+      lastTaskResult: null,
     };
   }
 
   async start() {
     this.health.state = 'running';
     await this.#persistHealth();
-    this.scheduler = new HeartbeatScheduler({
-      heartbeat: () => this.#heartbeat(),
-      intervalMs: this.config.agent.heartbeatIntervalMs,
+    const schedulerOptions = {
       initialRetryMs: this.config.retry.initialDelayMs,
       maximumRetryMs: this.config.retry.maximumDelayMs,
       logger: this.logger,
+    };
+    this.heartbeatScheduler = new HeartbeatScheduler({
+      heartbeat: () => this.#heartbeat(),
+      intervalMs: this.config.agent.heartbeatIntervalMs,
+      ...schedulerOptions,
     });
-    this.scheduler.start();
-    this.logger.info({ agentId: this.identity.agentId }, 'Agent runtime started; task polling is not implemented');
+    this.taskPollScheduler = new TaskPollScheduler({
+      pollTasks: () => this.#pollTasks(),
+      intervalMs: this.config.agent.pollIntervalMs,
+      ...schedulerOptions,
+    });
+    this.heartbeatScheduler.start();
+    this.taskPollScheduler.start();
+    this.logger.info({ agentId: this.identity.agentId }, 'Agent runtime started');
   }
 
   async stop() {
     this.health.state = 'stopping';
-    await this.scheduler?.stop();
+    await Promise.all([
+      this.heartbeatScheduler?.stop(),
+      this.taskPollScheduler?.stop(),
+    ]);
     this.health.state = 'stopped';
     await this.#persistHealth();
     this.logger.info('Agent runtime stopped');
@@ -85,11 +120,41 @@ export class AgentRuntime {
     }
   }
 
+  async #pollTasks() {
+    try {
+      const tasks = await this.apiClient.pollTasks(this.identity);
+      this.health.lastPollAt = new Date().toISOString();
+      this.health.lastPollError = null;
+      await this.#persistHealth();
+      if (tasks.length > 0) {
+        this.logger.info({ taskCount: tasks.length }, 'Received collector tasks');
+        await this.taskRunner.runAll(tasks);
+      }
+    } catch (error) {
+      this.health.lastPollError = error.message;
+      await this.#persistHealth();
+      throw error;
+    }
+  }
+
+  async #handleResult(result) {
+    this.health.lastTaskResult = {
+      taskId: result.taskId,
+      collector: result.collector,
+      status: result.status,
+      finishedAt: result.finishedAt,
+    };
+    await this.#persistHealth();
+    this.logger.info({ result }, 'Collector result ready');
+  }
+
   #persistHealth() {
-    return writeStatus(this.statusPath, {
-      ...this.health,
+    const snapshot = {
+      ...structuredClone(this.health),
       updatedAt: new Date().toISOString(),
       agentVersion: this.version,
-    });
+    };
+    this.persistChain = this.persistChain.then(() => writeStatus(this.statusPath, snapshot));
+    return this.persistChain;
   }
 }

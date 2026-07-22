@@ -68,6 +68,8 @@ export function createProgram() {
         process.stdout.write(`${JSON.stringify({
           agentId: identity?.agentId ?? null,
           lastHeartbeatAt: status?.lastHeartbeatAt ?? null,
+          lastPollAt: status?.lastPollAt ?? null,
+          lastTaskResult: status?.lastTaskResult ?? null,
           state: status?.state ?? 'not-running-or-no-status',
           agentVersion: status?.agentVersion ?? version,
         }, null, 2)}\n`);
