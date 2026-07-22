@@ -28,6 +28,18 @@
     "os-info": {
       "timeoutMs": 10000,
       "concurrency": 1
+    },
+    "apps": {
+      "timeoutMs": 20000,
+      "concurrency": 1,
+      "maxItems": 500
+    },
+    "sca-deps": {
+      "timeoutMs": 30000,
+      "concurrency": 1,
+      "scanPaths": [],
+      "maxDepth": 6,
+      "maxManifests": 200
     }
   }
 }

@@ -61,6 +61,14 @@ export const configSchema = {
         properties: {
           timeoutMs: { type: 'integer', minimum: 1 },
           concurrency: { type: 'integer', minimum: 1 },
+          maxItems: { type: 'integer', minimum: 1 },
+          scanPaths: {
+            type: 'array',
+            items: { type: 'string', minLength: 1 },
+            uniqueItems: true,
+          },
+          maxDepth: { type: 'integer', minimum: 0 },
+          maxManifests: { type: 'integer', minimum: 1 },
         },
       },
     },

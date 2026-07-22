@@ -37,7 +37,11 @@ export class TaskRunner {
       ...await executeCollector({
         collector,
         params: task.params,
-        context: { taskId: task.taskId, scheduledAt: task.scheduledAt },
+        context: {
+          taskId: task.taskId,
+          scheduledAt: task.scheduledAt,
+          collectorConfig: options,
+        },
         timeoutMs: options.timeoutMs ?? definition.timeoutMs ?? 30000,
       }),
     };
