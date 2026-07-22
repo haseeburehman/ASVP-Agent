@@ -61,6 +61,20 @@
       "bannerTimeoutMs": 2000,
       "maxBannerBytes": 1024,
       "maxScanOperationsPerTask": 100000
+    },
+    "tls-checks": {
+      "allowedCidrs": [],
+      "maxCidrSize": 16,
+      "allowWideRanges": false,
+      "timeoutMs": 180000,
+      "concurrency": 1,
+      "maxConcurrentTargets": 5,
+      "maxPortsPerHost": 1000,
+      "perHostDelayMs": 100,
+      "perHandshakeTimeoutMs": 5000,
+      "nmapTimeoutMs": 15000,
+      "expiryWarningDays": 30,
+      "maxScanOperationsPerTask": 100000
     }
   }
 }

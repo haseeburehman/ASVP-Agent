@@ -31,7 +31,8 @@ test('collector registry finds implemented collectors and reports unknown or uni
   assert.equal(registry.has('does-not-exist'), false);
   assert.equal((await registry.get('noop')).name, 'noop');
   assert.equal((await registry.get('network-scan')).name, 'network-scan');
-  await assert.rejects(registry.get('tls-checks'), (error) => {
+  assert.equal((await registry.get('tls-checks')).name, 'tls-checks');
+  await assert.rejects(registry.get('compliance-checks'), (error) => {
     assert.ok(error instanceof CollectorNotImplementedError);
     assert.match(error.message, /allowlisted but not implemented/);
     return true;

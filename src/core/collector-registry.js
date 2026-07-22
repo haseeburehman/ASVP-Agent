@@ -35,7 +35,12 @@ const builtInDefinitions = {
     timeoutMs: 120000,
     concurrency: 1,
   },
-  'tls-checks': { modulePath: '../collectors/tls-checks/index.js', implemented: false },
+  'tls-checks': {
+    modulePath: '../collectors/tls-checks/index.js',
+    implemented: true,
+    timeoutMs: 180000,
+    concurrency: 1,
+  },
   'compliance-checks': { modulePath: '../collectors/compliance-checks/index.js', implemented: false },
 };
 
