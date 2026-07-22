@@ -41,7 +41,12 @@ const builtInDefinitions = {
     timeoutMs: 180000,
     concurrency: 1,
   },
-  'compliance-checks': { modulePath: '../collectors/compliance-checks/index.js', implemented: false },
+  'compliance-checks': {
+    modulePath: '../collectors/compliance-checks/index.js',
+    implemented: true,
+    timeoutMs: 30000,
+    concurrency: 1,
+  },
 };
 
 export class CollectorNotImplementedError extends Error {

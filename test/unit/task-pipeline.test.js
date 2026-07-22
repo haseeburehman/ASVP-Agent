@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CollectorRegistry, CollectorNotImplementedError } from '../../src/core/collector-registry.js';
+import { CollectorRegistry } from '../../src/core/collector-registry.js';
 import { TaskRunner } from '../../src/core/task-runner.js';
 import { ApiClient, MockManagementTransport } from '../../src/transport/api-client.js';
 
@@ -24,7 +24,7 @@ function createApiConfig() {
   };
 }
 
-test('collector registry finds implemented collectors and reports unknown or unimplemented collectors', async () => {
+test('collector registry finds implemented collectors and reports unknown collectors', async () => {
   const registry = new CollectorRegistry();
 
   assert.equal(registry.has('noop'), true);
@@ -32,11 +32,7 @@ test('collector registry finds implemented collectors and reports unknown or uni
   assert.equal((await registry.get('noop')).name, 'noop');
   assert.equal((await registry.get('network-scan')).name, 'network-scan');
   assert.equal((await registry.get('tls-checks')).name, 'tls-checks');
-  await assert.rejects(registry.get('compliance-checks'), (error) => {
-    assert.ok(error instanceof CollectorNotImplementedError);
-    assert.match(error.message, /allowlisted but not implemented/);
-    return true;
-  });
+  assert.equal((await registry.get('compliance-checks')).name, 'compliance-checks');
   await assert.rejects(registry.get('does-not-exist'), /not registered or implemented/);
 });
 

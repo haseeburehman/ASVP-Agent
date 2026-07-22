@@ -89,6 +89,7 @@ export const configSchema = {
           perHandshakeTimeoutMs: { type: 'integer', minimum: 1 },
           nmapTimeoutMs: { type: 'integer', minimum: 1 },
           expiryWarningDays: { type: 'integer', minimum: 0 },
+          commandTimeoutMs: { type: 'integer', minimum: 1 },
         },
       },
     },

@@ -75,6 +75,11 @@
       "nmapTimeoutMs": 15000,
       "expiryWarningDays": 30,
       "maxScanOperationsPerTask": 100000
+    },
+    "compliance-checks": {
+      "timeoutMs": 30000,
+      "concurrency": 1,
+      "commandTimeoutMs": 8000
     }
   }
 }
