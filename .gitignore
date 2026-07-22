@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+config/local.json
+config/production.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+
+# Runtime state and potentially sensitive scan data
+var/cache/*
+var/log/*
+var/*.json
+var/*.tmp
+!var/cache/.gitkeep
+!var/log/.gitkeep
+*.log
+*.pid
+
+# Coverage and build output
+coverage/
+dist/
+build/
+.nyc_output/
+
+# Package manager and debug output
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

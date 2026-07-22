@@ -1,0 +1,21 @@
+{
+  "server": {
+    "mode": "mock",
+    "url": "mock://local-management-server",
+    "registrationPath": "/api/agents/register",
+    "heartbeatPath": "/api/agents/heartbeat",
+    "requestTimeoutMs": 10000
+  },
+  "agent": {
+    "heartbeatIntervalMs": 30000,
+    "logLevel": "info"
+  },
+  "storage": {
+    "identityPath": "var/identity.json",
+    "statusPath": "var/status.json"
+  },
+  "retry": {
+    "initialDelayMs": 1000,
+    "maximumDelayMs": 30000
+  }
+}
