@@ -24,13 +24,14 @@ function createApiConfig() {
   };
 }
 
-test('collector registry finds noop and reports unknown or unimplemented collectors', async () => {
+test('collector registry finds implemented collectors and reports unknown or unimplemented collectors', async () => {
   const registry = new CollectorRegistry();
 
   assert.equal(registry.has('noop'), true);
   assert.equal(registry.has('does-not-exist'), false);
   assert.equal((await registry.get('noop')).name, 'noop');
-  await assert.rejects(registry.get('network-scan'), (error) => {
+  assert.equal((await registry.get('network-scan')).name, 'network-scan');
+  await assert.rejects(registry.get('tls-checks'), (error) => {
     assert.ok(error instanceof CollectorNotImplementedError);
     assert.match(error.message, /allowlisted but not implemented/);
     return true;
@@ -83,7 +84,7 @@ test('task runner converts an unknown collector into a failed result', async () 
   assert.deepEqual(handedOff, [result]);
 });
 
-test('mock transport runs noop end-to-end and gracefully reports the unimplemented task', async () => {
+test('mock transport runs noop and safely refuses the default network scan end-to-end', async () => {
   const apiClient = new ApiClient({
     config: createApiConfig(),
     transport: new MockManagementTransport(),
@@ -105,8 +106,11 @@ test('mock transport runs noop end-to-end and gracefully reports the unimplement
   assert.equal(noop.status, 'success');
   assert.equal(noop.data.message, 'No-op collector completed');
   assert.equal(noop.data.echo.source, 'mock-management-transport');
-  assert.equal(networkScan.status, 'failed');
-  assert.match(networkScan.error.message, /allowlisted but not implemented/);
+  assert.equal(networkScan.status, 'success');
+  assert.equal(networkScan.error, null);
+  assert.equal(networkScan.data.authorization.authorized, false);
+  assert.equal(networkScan.data.authorization.code, 'allowlist-not-configured');
+  assert.deepEqual(networkScan.data.hosts, []);
   assert.equal(handedOff.length, 2);
   assert.deepEqual(await apiClient.pollTasks(identity), []);
 });

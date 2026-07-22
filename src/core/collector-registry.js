@@ -29,7 +29,12 @@ const builtInDefinitions = {
     timeoutMs: 60000,
     concurrency: 1,
   },
-  'network-scan': { modulePath: '../collectors/network-scan/index.js', implemented: false },
+  'network-scan': {
+    modulePath: '../collectors/network-scan/index.js',
+    implemented: true,
+    timeoutMs: 120000,
+    concurrency: 1,
+  },
   'tls-checks': { modulePath: '../collectors/tls-checks/index.js', implemented: false },
   'compliance-checks': { modulePath: '../collectors/compliance-checks/index.js', implemented: false },
 };

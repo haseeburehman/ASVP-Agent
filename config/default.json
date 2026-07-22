@@ -51,10 +51,15 @@
       "allowedCidrs": [],
       "maxCidrSize": 16,
       "allowWideRanges": false,
+      "timeoutMs": 120000,
+      "concurrency": 1,
       "maxConcurrentTargets": 5,
+      "maxConcurrentPortsPerHost": 50,
       "maxPortsPerHost": 1000,
       "perHostDelayMs": 100,
       "perPortTimeoutMs": 1000,
+      "bannerTimeoutMs": 2000,
+      "maxBannerBytes": 1024,
       "maxScanOperationsPerTask": 100000
     }
   }
