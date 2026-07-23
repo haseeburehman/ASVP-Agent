@@ -54,17 +54,24 @@ try {
   if (process.env.REQUIRE_PACKAGED_FALLBACK === 'true') {
     const fallbackConfigPath = path.join(clean, 'config', 'fallback-test.json');
     const fallbackConfig = JSON.parse(await readFile(path.join(clean, 'config', 'default.json'), 'utf8'));
+    const identityPath = path.resolve(clean, 'var', 'fallback-identity.json');
+    const statusPath = path.resolve(clean, 'var', 'fallback-status.json');
+    const queueDirectory = path.resolve(clean, 'var', 'fallback-queue');
     fallbackConfig.server.mode = 'mock';
-    fallbackConfig.storage.identityPath = 'var/fallback-identity.json';
-    fallbackConfig.storage.statusPath = 'var/fallback-status.json';
-    fallbackConfig.storage.queueDir = 'var/fallback-queue';
+    fallbackConfig.storage.identityPath = identityPath;
+    fallbackConfig.storage.statusPath = statusPath;
+    fallbackConfig.storage.queueDir = queueDirectory;
     await writeFile(fallbackConfigPath, `${JSON.stringify(fallbackConfig, null, 2)}\n`);
-    await run(['--config', fallbackConfigPath, 'register']);
-    const statusResult = await run(['--config', fallbackConfigPath, 'status']);
-    if (!/"agentId"\s*:\s*"[^"]+"/.test(statusResult.stdout)) {
-      throw new Error(`Packaged fallback identity was not reloaded by status: ${statusResult.stdout}`);
+    const registerResult = await run(['--config', fallbackConfigPath, 'register']);
+    const registeredAgentId = registerResult.stdout.match(/"agentId"\s*:\s*"([^"]+)"/)?.[1];
+    if (!registeredAgentId) {
+      throw new Error(`Packaged fallback registration did not report its agentId: ${registerResult.stdout}`);
     }
-    const identityPath = path.join(clean, 'var', 'fallback-identity.json');
+    const statusResult = await run(['--config', fallbackConfigPath, 'status']);
+    const statusAgentId = statusResult.stdout.match(/"agentId"\s*:\s*"([^"]+)"/)?.[1];
+    if (statusAgentId !== registeredAgentId) {
+      throw new Error(`Packaged fallback identity continuity failed: registered ${registeredAgentId}, status returned ${statusAgentId ?? 'null'}`);
+    }
     const identity = JSON.parse(await readFile(identityPath, 'utf8'));
     if (!identity.agentId || !identity.authToken || !identity.encryptionKey) {
       throw new Error('Packaged restricted-file fallback persisted an incomplete identity');
@@ -73,7 +80,7 @@ try {
       const mode = (await stat(identityPath)).mode & 0o777;
       if (mode !== 0o600) throw new Error(`Packaged restricted-file fallback mode was ${mode.toString(8)}, expected 600`);
     }
-    process.stdout.write('Packaged restricted-file credential fallback round trip passed (mode 0600).\n');
+    process.stdout.write(`Packaged restricted-file credential fallback round trip passed: register agentId=${registeredAgentId}; status agentId=${statusAgentId}; state=not-running-or-no-status; mode=0600.\n`);
   }
 } finally {
   await rm(clean, { recursive: true, force: true });
