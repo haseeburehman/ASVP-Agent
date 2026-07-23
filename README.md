@@ -137,7 +137,13 @@ Remote collectors require explicit targets and those targets must be contained b
 
 ## Result delivery
 
-The default configuration now uses real HTTPS transport (`server.mode: "http"`). Replace the placeholder `https://management.example.invalid` URL with the deployment's management endpoint before running the service. Local development and CI can explicitly select `server.mode: "mock"`.
+The default configuration uses real HTTPS transport (`server.mode: "http"`). Enroll before running the service instead of hand-editing JSON:
+
+```sh
+asvp-agent --config /path/to/config.json enroll
+```
+
+The command prompts for a required management URL and optional short-lived enrollment token. It accepts HTTPS, plus `http://127.0.0.1` or `http://localhost` for local testing, and explicitly rejects the `https://management.example.invalid` placeholder. Local development and CI can still explicitly select `server.mode: "mock"`. Enrollment changes only the server address/token; remote collectors retain their existing explicit target and `allowedCidrs` authorization checks.
 
 Pending queue results are serialized, gzip-compressed, and encrypted with AES-256-GCM immediately before upload. The encryption key is provisioned during registration and stored with the auth token through the OS keychain or restricted-file fallback. The server must explicitly acknowledge an upload with `{ "accepted": true, "queueItemId": "..." }` before the local item is marked delivered. Transient failures return items to pending; permanent payload-rejection HTTP responses mark them failed-permanent.
 
@@ -204,7 +210,7 @@ Download the installer matching the machine architecture:
 - `asvp-agent-<version>-windows-x64-setup.exe`
 - `asvp-agent-<version>-windows-arm64-setup.exe`
 
-Run the installer as Administrator. It installs under `C:\Program Files\ASVP Agent` and offers to run the existing `asvp-agent service install` command on the final page. The x64 and ARM64 packages are separate because Windows PE executables are architecture-specific.
+Run the installer as Administrator. After choosing the install directory, the enrollment page requires the real management server URL and accepts an optional enrollment token. **Next** remains blocked for malformed/insecure URLs and the placeholder. Once files are installed, setup passes the values through a temporary input file to the packaged `enroll` command; that command validates and atomically updates the installed config, deletes the temporary input, and only then does setup install/start the service. Thus the first service launch already has the selected server. It installs under `C:\Program Files\ASVP Agent`. The x64 and ARM64 packages are separate because Windows PE executables are architecture-specific.
 
 > **Windows ARM64 is experimental/best-effort.** GitHub's `windows-latest` runner is x64, and `@yao-pkg/pkg` can fail with `spawn UNKNOWN` while fetching or preparing its Windows ARM64 base binary. Upstream's open Node 22 tooling tracker documents unresolved cross-architecture packaging limitations. The ARM64 matrix entry is allowed to fail without blocking Windows x64, Linux x64, or either native macOS build. When an ARM64 artifact is produced, the agent executable is native ARM64; its pinned WinSW 2.12.0 service wrapper is x64 because WinSW does not publish an ARM64 asset, and therefore uses Windows-on-ARM x64 emulation. Do not treat ARM64 as production-qualified until its packaged keychain and service cycle pass on real Windows ARM64 hardware.
 
@@ -222,9 +228,10 @@ sudo apt install ./asvp-agent-<version>-linux-x64.deb
 sudo rpm -U ./asvp-agent-<version>-linux-x64.rpm
 ```
 
-Package-manager scripts must not block unattended installs with prompts. Installation therefore prints, but does not automatically execute, the explicit opt-in service command:
+Package-manager scripts must not block unattended installs with prompts. Installation therefore prints the two explicit post-install commands; enroll first, then install the service:
 
 ```sh
+sudo /opt/asvp-agent/asvp-agent --config /etc/asvp-agent/config.json enroll
 sudo /opt/asvp-agent/asvp-agent --config /etc/asvp-agent/config.json service install
 ```
 
@@ -241,9 +248,10 @@ Download `asvp-agent-<version>-macos-x64.pkg` for Intel Macs or `asvp-agent-<ver
 3. Find the message that the ASVP package was blocked and select **Open Anyway**.
 4. Authenticate as an administrator and confirm **Open**.
 
-After installation, run:
+After installation, enroll first and then install the service:
 
 ```sh
+sudo '/Library/Application Support/ASVP Agent/asvp-agent' --config '/Library/Application Support/ASVP Agent/config/default.json' enroll
 sudo '/Library/Application Support/ASVP Agent/asvp-agent' --config '/Library/Application Support/ASVP Agent/config/default.json' service install
 ```
 
@@ -258,6 +266,24 @@ asvp-agent diagnostics credentials --require-keychain
 On Windows x64 and macOS, release CI loads the native `keytar` binding and performs a temporary OS-keychain write/read/delete round trip; `--require-keychain` exits nonzero if the process falls back or the keychain is not operational.
 
 Linux GitHub runners are headless and have no PAM/desktop login session to create and unlock the Secret Service `login` collection or its default alias. Starting only a synthetic D-Bus session and `gnome-keyring-daemon` loads libsecret but does not reproduce a real user's keyring, causing `Object does not exist at path /org/freedesktop/secrets/collection/login`. Linux CI therefore does not claim OS-keychain verification. Instead it verifies the packaged restricted-file path end to end: mock registration persists an identity, `status` reloads it in a separate process, and the verifier requires mode `0600`. Linux Secret Service behavior remains a manual acceptance check on a real installation with a genuine logged-in user/keyring session.
+
+## Central fleet dashboard
+
+The central management server serves its fleet UI at `/fleet` (and `/`). Sign in with the same `ADMIN_TOKEN` used by admin API routes. Successful login exchanges that token for an opaque, eight-hour, `HttpOnly`, `SameSite=Strict` session cookie; browser JavaScript does not retain the admin token. Set `DASHBOARD_SECURE_COOKIE=true` behind production HTTPS so the cookie also has `Secure`.
+
+The page has summary cards and a color-coded agent table: green **online**, yellow **never connected**, and red **stale**. It shows hostname, platform/architecture, agent ID, registration time, last heartbeat, and last poll. Selecting an agent opens registration data, its own complete task/result history, readable decrypted collector JSON, and the latest 200 register/heartbeat/poll/task/result events. The UI polls every five seconds, which keeps this initial single-process dashboard simple and reliable without adding WebSocket state.
+
+Status is computed at read time. With the default expected heartbeat interval of 30 seconds, an agent is online when its last heartbeat is at most 60 seconds old (2× expected interval), stale after 60 seconds, and never connected when no heartbeat has ever arrived. Configure the expectation with `EXPECTED_HEARTBEAT_INTERVAL_MS`; the API returns both thresholds so the UI always explains the active values.
+
+To require enrollment tokens for new registrations, set `REQUIRE_ENROLLMENT_TOKEN=true` (default is `false`). Create a token with the admin bearer credential:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/admin/enrollment-tokens \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"expiresInHours":24,"maxUses":1}'
+```
+
+Only a SHA-256 token hash is stored. Valid continuity re-registration using the existing agent credential does not consume a new enrollment token. Tokens reduce unauthorized registrations by someone who merely knows the server URL and bound the exposure by time/use count. They do **not** prove hardware/device identity, replace TLS or mTLS, resist endpoint compromise, or protect a token after it is stolen.
 
 ## Native service installation
 

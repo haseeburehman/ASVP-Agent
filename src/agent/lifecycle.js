@@ -35,7 +35,12 @@ export class AgentLifecycle {
     const { identity, registered } = await loadOrRegisterIdentity({
       credentialStore: this.credentialStore,
       apiClient: this.apiClient,
-      metadata: { hostname: os.hostname(), platform: process.platform, architecture: process.arch },
+      metadata: {
+        hostname: os.hostname(),
+        platform: process.platform,
+        architecture: process.arch,
+        enrollmentToken: this.config.server.enrollmentToken,
+      },
     });
     this.logger.info({ agentId: identity.agentId, registered }, registered ? 'Agent registered' : 'Loaded existing agent identity');
 

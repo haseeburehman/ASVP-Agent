@@ -7,10 +7,20 @@ const port = Number(process.env.ASVP_SERVER_PORT ?? 8080);
 const databasePath = process.env.ASVP_DATABASE_PATH ?? 'var/management.sqlite';
 const configuredAdminToken = process.env.ADMIN_TOKEN;
 const adminToken = configuredAdminToken || randomBytes(32).toString('base64url');
+const requireEnrollmentToken = process.env.REQUIRE_ENROLLMENT_TOKEN === 'true';
+const expectedHeartbeatIntervalMs = Number(process.env.EXPECTED_HEARTBEAT_INTERVAL_MS ?? 30000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ASVP_SERVER_PORT must be a valid TCP port');
+if (!Number.isInteger(expectedHeartbeatIntervalMs) || expectedHeartbeatIntervalMs < 100) throw new Error('EXPECTED_HEARTBEAT_INTERVAL_MS must be at least 100');
 
 const database = createDatabase({ filename: databasePath });
-const app = createApp({ database, adminToken, logger: console });
+const app = createApp({
+  database,
+  adminToken,
+  requireEnrollmentToken,
+  expectedHeartbeatIntervalMs,
+  secureDashboardCookie: process.env.DASHBOARD_SECURE_COOKIE === 'true',
+  logger: console,
+});
 const server = app.listen(port, host, () => {
   console.info({ event: 'server-started', host, port, databasePath, adminTokenSource: configuredAdminToken ? 'environment' : 'generated' });
   if (!configuredAdminToken) {

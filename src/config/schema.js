@@ -18,6 +18,7 @@ export const configSchema = {
         tasksPath: { type: 'string', pattern: '^/' },
         resultsPath: { type: 'string', pattern: '^/' },
         adminToken: { type: ['string', 'null'], minLength: 1 },
+        enrollmentToken: { type: ['string', 'null'], minLength: 1 },
         requestTimeoutMs: { type: 'integer', minimum: 1 },
       },
       allOf: [

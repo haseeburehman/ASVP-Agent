@@ -7,7 +7,8 @@
     "tasksPath": "/api/agents/tasks/poll",
     "resultsPath": "/api/agents/results",
     "adminToken": null,
-    "requestTimeoutMs": 10000
+        "enrollmentToken": null,
+        "requestTimeoutMs": 10000
   },
   "agent": {
     "heartbeatIntervalMs": 30000,

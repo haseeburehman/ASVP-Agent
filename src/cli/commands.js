@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { Command } from 'commander';
 import { AgentLifecycle } from '../agent/lifecycle.js';
@@ -9,6 +9,7 @@ import { DEFAULT_TLS_PORTS } from '../collectors/tls-checks/index.js';
 import { loadConfig } from '../config/loader.js';
 import { CollectorRegistry } from '../core/collector-registry.js';
 import { TaskRunner } from '../core/task-runner.js';
+import { runEnrollment } from '../enrollment/index.js';
 import { CredentialStore } from '../security/credentials.js';
 import { ResultStore } from '../storage/result-store.js';
 import { runServiceCommand } from '../service/index.js';
@@ -192,6 +193,29 @@ export function createProgram({ contextFactory = createContext } = {}) {
       await lifecycle.start();
     });
 
+  program.command('enroll')
+    .description('configure the management server for this installation')
+    .option('--server-url <url>', 'management server HTTPS URL')
+    .option('--enrollment-token <token>', 'optional short-lived enrollment token')
+        .option('--input-file <path>', 'read URL and token from a temporary installer input file')
+        .action(async (options, command) => {
+          const { config: configPath } = command.optsWithGlobals();
+          if (!configPath) throw new Error('enroll requires --config <path>');
+          let serverUrl = options.serverUrl;
+          let enrollmentToken = options.enrollmentToken;
+          if (options.inputFile) {
+            try {
+              const [fileUrl, ...tokenLines] = (await readFile(options.inputFile, 'utf8')).split(/\r?\n/);
+              serverUrl = fileUrl;
+              enrollmentToken = tokenLines.join('').trim();
+            } finally {
+              await unlink(options.inputFile).catch(() => {});
+            }
+          }
+          const result = await runEnrollment({ configPath, serverUrl, enrollmentToken });
+      process.stdout.write(`Enrollment saved to ${result.configPath}\n`);
+    });
+
   program.command('register')
     .description('force registration and replace the local identity')
     .action(async (_, command) => {
@@ -203,7 +227,12 @@ export function createProgram({ contextFactory = createContext } = {}) {
           logger,
         }).initialize();
         const apiClient = new ApiClient({ config });
-        const { identity } = await loadOrRegisterIdentity({ credentialStore, apiClient, force: true });
+        const { identity } = await loadOrRegisterIdentity({
+          credentialStore,
+          apiClient,
+          force: true,
+          metadata: { enrollmentToken: config.server.enrollmentToken },
+        });
         logger.info({ agentId: identity.agentId }, 'Agent registration replaced');
       } finally {
         await flushLogger(logger);

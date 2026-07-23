@@ -11,6 +11,7 @@ const defaultConfigPath = path.join(projectRoot, 'config', 'default.json');
 const envMappings = {
   ASVP_SERVER_MODE: ['server', 'mode', String],
   ASVP_SERVER_URL: ['server', 'url', String],
+    ASVP_ENROLLMENT_TOKEN: ['server', 'enrollmentToken', String],
   ASVP_REGISTRATION_PATH: ['server', 'registrationPath', String],
   ASVP_HEARTBEAT_PATH: ['server', 'heartbeatPath', String],
   ASVP_TASKS_PATH: ['server', 'tasksPath', String],
