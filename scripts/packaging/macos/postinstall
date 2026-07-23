@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+chmod 0755 '/Library/Application Support/ASVP Agent/asvp-agent'
+mkdir -p '/Library/Application Support/ASVP Agent/var'
+chmod 0700 '/Library/Application Support/ASVP Agent/var'
+printf '%s\n' 'ASVP Agent installed.' 'To install and start its launchd service, run:' "  sudo '/Library/Application Support/ASVP Agent/asvp-agent' --config '/Library/Application Support/ASVP Agent/config/default.json' service install"
+exit 0

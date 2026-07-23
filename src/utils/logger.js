@@ -1,7 +1,10 @@
+import { Writable } from 'node:stream';
 import pino from 'pino';
 
 const redactPaths = [
   'authToken',
+  'adminToken',
+  'config.server.adminToken',
   'token',
   'identity.authToken',
   'identity.token',
@@ -10,14 +13,33 @@ const redactPaths = [
   'headers.authorization',
 ];
 
+function createLogHookStream(onLog) {
+  return new Writable({
+    write(chunk, _encoding, callback) {
+      try {
+        onLog(JSON.parse(chunk.toString()));
+      } catch {
+        // Pino emits complete JSON lines; malformed hook data is ignored rather than affecting logging.
+      }
+      callback();
+    },
+  });
+}
+
 export function createLogger(options = {}) {
-  return pino({
+  const loggerOptions = {
     level: options.level ?? 'info',
     redact: {
       paths: redactPaths,
       censor: '[REDACTED]',
     },
-  }, options.destination);
+  };
+  if (!options.onLog) return pino(loggerOptions, options.destination);
+  const primary = options.destination ?? pino.destination(1);
+  return pino(loggerOptions, pino.multistream([
+    { stream: primary },
+    { stream: createLogHookStream(options.onLog) },
+  ]));
 }
 
 export async function flushLogger(logger) {

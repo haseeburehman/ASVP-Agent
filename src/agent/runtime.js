@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CollectorRegistry } from '../core/collector-registry.js';
@@ -8,8 +9,9 @@ import { ResultUploader } from '../transport/result-uploader.js';
 
 async function writeStatus(statusPath, status) {
   await mkdir(path.dirname(statusPath), { recursive: true, mode: 0o700 });
-  const temporaryPath = `${statusPath}.${process.pid}.tmp`;
+  const temporaryPath = `${statusPath}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporaryPath, `${JSON.stringify(status, null, 2)}\n`, { mode: 0o600 });
+  if (process.platform === 'win32') await rm(statusPath, { force: true });
   await rename(temporaryPath, statusPath);
 }
 
@@ -48,6 +50,7 @@ export class AgentRuntime {
     this.externalOnResult = onResult;
     this.registry = registry ?? new CollectorRegistry();
     const uploadConfig = config.collectors.upload;
+    this.authFailureThreshold = uploadConfig.authFailureThreshold ?? 5;
     this.resultUploader = resultUploader ?? new ResultUploader({
       resultStore,
       apiClient,
@@ -73,6 +76,11 @@ export class AgentRuntime {
       queueDepth: 0,
       queueEvictedCount: 0,
       queueLastEvictedAt: null,
+      failedPermanentCount: 0,
+      failedPermanentRetainUntil: null,
+      consecutiveUploadAuthFailures: 0,
+      authFailureThreshold: this.authFailureThreshold,
+      healthState: 'healthy',
     };
   }
 
@@ -122,6 +130,20 @@ export class AgentRuntime {
     return structuredClone(this.health);
   }
 
+  async uploadResultsOnce({ signal } = {}) {
+    return this.#uploadResults(signal);
+  }
+
+  async testConnection() {
+    const startedAt = Date.now();
+    await this.#heartbeat();
+    return {
+      ok: true,
+      testedAt: this.health.lastHeartbeatAt,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
   async #heartbeat() {
     await this.#refreshQueueHealth();
     const payload = {
@@ -138,7 +160,11 @@ export class AgentRuntime {
       this.health.lastHeartbeatAt = new Date().toISOString();
       this.health.lastHeartbeatError = null;
       await this.#persistHealth();
-      this.logger.debug({ heartbeat: payload }, 'Heartbeat accepted');
+      this.logger.info({
+        agentId: this.identity.agentId,
+        currentQueueSize: payload.currentQueueSize,
+        receivedAt: this.health.lastHeartbeatAt,
+      }, 'Heartbeat accepted by management server');
     } catch (error) {
       this.health.lastHeartbeatError = error.message;
       await this.#persistHealth();
@@ -152,10 +178,12 @@ export class AgentRuntime {
       this.health.lastPollAt = new Date().toISOString();
       this.health.lastPollError = null;
       await this.#persistHealth();
-      if (tasks.length > 0) {
-        this.logger.info({ taskCount: tasks.length }, 'Received collector tasks');
-        await this.taskRunner.runAll(tasks);
-      }
+      this.logger.info({
+        agentId: this.identity.agentId,
+        taskCount: tasks.length,
+        receivedAt: this.health.lastPollAt,
+      }, tasks.length > 0 ? 'Received collector tasks' : 'Task poll completed with no tasks');
+      if (tasks.length > 0) await this.taskRunner.runAll(tasks);
     } catch (error) {
       this.health.lastPollError = error.message;
       await this.#persistHealth();
@@ -165,9 +193,23 @@ export class AgentRuntime {
 
   async #uploadResults(signal) {
     const summary = await this.resultUploader.drain({ signal });
+    if (summary.delivered > 0) {
+      this.health.consecutiveUploadAuthFailures = 0;
+      this.health.healthState = 'healthy';
+    } else if (summary.authFailures > 0) {
+      this.health.consecutiveUploadAuthFailures += summary.authFailures;
+      if (this.health.consecutiveUploadAuthFailures >= this.authFailureThreshold) {
+        this.health.healthState = 'authentication-degraded';
+        this.logger.error({
+          consecutiveUploadAuthFailures: this.health.consecutiveUploadAuthFailures,
+          authFailureThreshold: this.authFailureThreshold,
+        }, 'Result upload authentication is degraded; verify agent registration credentials');
+      }
+    }
     await this.#refreshQueueHealth();
     await this.#persistHealth();
     if (summary.attempted > 0) this.logger.debug({ upload: summary }, 'Result upload cycle completed');
+    return summary;
   }
 
   async #handleResult(result) {
@@ -197,6 +239,8 @@ export class AgentRuntime {
     this.health.queueDepth = stats.pendingCount;
     this.health.queueEvictedCount = stats.evictedCount;
     this.health.queueLastEvictedAt = stats.lastEvictedAt;
+    this.health.failedPermanentCount = stats.failedPermanentCount;
+    this.health.failedPermanentRetainUntil = stats.failedPermanentRetainUntil;
   }
 
   #persistHealth() {

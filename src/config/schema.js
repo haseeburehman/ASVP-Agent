@@ -4,7 +4,7 @@
 export const configSchema = {
   type: 'object',
   additionalProperties: true,
-  required: ['server', 'agent', 'storage', 'retry', 'collectors'],
+  required: ['server', 'agent', 'dashboard', 'storage', 'retry', 'collectors'],
   properties: {
     server: {
       type: 'object',
@@ -17,12 +17,23 @@ export const configSchema = {
         heartbeatPath: { type: 'string', pattern: '^/' },
         tasksPath: { type: 'string', pattern: '^/' },
         resultsPath: { type: 'string', pattern: '^/' },
+        adminToken: { type: ['string', 'null'], minLength: 1 },
         requestTimeoutMs: { type: 'integer', minimum: 1 },
       },
       allOf: [
         {
           if: { properties: { mode: { const: 'http' } }, required: ['mode'] },
-          then: { properties: { url: { type: 'string', pattern: '^https://' } } },
+          then: {
+            properties: {
+              url: {
+                type: 'string',
+                anyOf: [
+                  { pattern: '^https://' },
+                  { pattern: '^http://(127\\.0\\.0\\.1|localhost)(:[0-9]+)?(?:/|$)' },
+                ],
+              },
+            },
+          },
         },
       ],
     },
@@ -34,6 +45,16 @@ export const configSchema = {
         heartbeatIntervalMs: { type: 'integer', minimum: 100 },
         pollIntervalMs: { type: 'integer', minimum: 100 },
         logLevel: { enum: ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] },
+      },
+    },
+    dashboard: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['enabled', 'port', 'bindAddress'],
+      properties: {
+        enabled: { type: 'boolean' },
+        port: { type: 'integer', minimum: 1, maximum: 65535 },
+        bindAddress: { type: 'string', minLength: 1 },
       },
     },
     storage: {
@@ -105,6 +126,7 @@ export const configSchema = {
           intervalMs: { type: 'integer', minimum: 100 },
           uploadConcurrency: { type: 'integer', minimum: 1 },
           maxPayloadWarningBytes: { type: 'integer', minimum: 1 },
+          authFailureThreshold: { type: 'integer', minimum: 1 },
         },
       },
     },

@@ -59,6 +59,26 @@ test('forced registration replaces the persisted identity', async () => {
   assert.equal(apiClient.calls, 2);
 });
 
+test('incomplete existing identity is sent as previousAgentId during migration registration', async () => {
+  let registrationMetadata;
+  let saved;
+  const credentialStore = {
+    async loadIdentity() { return { agentId: 'legacy-agent', authToken: 'legacy-token' }; },
+    async saveIdentity(identity) { saved = identity; },
+  };
+  const replacement = {
+    agentId: 'legacy-agent', authToken: 'rotated-token', encryptionKey: Buffer.alloc(32, 9).toString('base64'),
+  };
+  const result = await loadOrRegisterIdentity({
+    credentialStore,
+    apiClient: { async register(metadata) { registrationMetadata = metadata; return replacement; } },
+    metadata: { hostname: 'migration-host' },
+  });
+  assert.deepEqual(registrationMetadata, { hostname: 'migration-host', previousAgentId: 'legacy-agent' });
+  assert.deepEqual(saved, replacement);
+  assert.equal(result.registered, true);
+});
+
 test('rejects incomplete registration responses without persisting them', async () => {
   const store = await new CredentialStore({
     identityPath: 'unused.json',

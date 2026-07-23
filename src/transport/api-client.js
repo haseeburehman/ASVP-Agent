@@ -78,8 +78,8 @@ export class FetchManagementTransport {
     return response.json();
   }
 
-  register(pathname, payload) {
-    return this.#post(pathname, payload);
+  register(pathname, payload, previousAuthToken) {
+    return this.#post(pathname, payload, previousAuthToken);
   }
 
   heartbeat(pathname, payload, authToken) {
@@ -106,8 +106,8 @@ export class ApiClient {
       }));
   }
 
-  register(metadata = {}) {
-    return this.transport.register(this.config.server.registrationPath, metadata);
+  register(metadata = {}, previousAuthToken) {
+    return this.transport.register(this.config.server.registrationPath, metadata, previousAuthToken);
   }
 
   sendHeartbeat(identity, status) {
@@ -136,14 +136,15 @@ export class ApiClient {
 }
 
 export async function loadOrRegisterIdentity({ credentialStore, apiClient, force = false, metadata = {} }) {
-  if (!force) {
-    const existing = await credentialStore.loadIdentity();
-    if (existing?.agentId && existing?.authToken && existing?.encryptionKey) {
-      return { identity: existing, registered: false };
-    }
+  const existing = await credentialStore.loadIdentity();
+  if (!force && existing?.agentId && existing?.authToken && existing?.encryptionKey) {
+    return { identity: existing, registered: false };
   }
 
-  const identity = await apiClient.register(metadata);
+  const registrationMetadata = existing?.agentId
+    ? { ...metadata, previousAgentId: existing.agentId }
+    : metadata;
+  const identity = await apiClient.register(registrationMetadata, existing?.authToken);
   if (!identity?.agentId || !identity?.authToken || !identity?.encryptionKey) {
     throw new Error('Registration response did not include agentId, authToken, and encryptionKey');
   }

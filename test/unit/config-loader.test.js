@@ -46,7 +46,18 @@ test('fails fast with a clear validation error', async () => {
   });
 });
 
-test('requires HTTPS when the real HTTP transport is selected', async () => {
+test('allows plain HTTP only for a loopback development management server', async () => {
+  await withTempDirectory(async (directory) => {
+    const alternatePath = path.join(directory, 'loopback.json');
+    await writeFile(alternatePath, JSON.stringify({
+      server: { mode: 'http', url: 'http://127.0.0.1:8080' },
+    }));
+    const config = await loadConfig({ configPath: alternatePath, env: {}, loadDotEnv: false });
+    assert.equal(config.server.url, 'http://127.0.0.1:8080');
+  });
+});
+
+test('requires HTTPS when the real HTTP transport is selected for a non-loopback host', async () => {
   await withTempDirectory(async (directory) => {
     const alternatePath = path.join(directory, 'insecure.json');
     await writeFile(alternatePath, JSON.stringify({

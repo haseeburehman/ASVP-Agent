@@ -1,0 +1,21 @@
+{
+  "name": "asvp-central-management-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first central management API for the ASVP internal network agent",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.1.4"
+  }
+}

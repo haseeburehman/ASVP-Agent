@@ -71,6 +71,7 @@ test('enqueue and delivery-state transitions round trip durably', async () => {
     const stats = await store.getStats();
     assert.equal(stats.deliveredCount, 1);
     assert.equal(stats.failedPermanentCount, 1);
+    assert.equal(typeof stats.failedPermanentRetainUntil, 'string');
   });
 });
 
@@ -147,6 +148,26 @@ test('age limit evicts stale items while retaining newer results', async () => {
     assert.ok(!pendingIds.includes(stale.id));
     assert.ok(pendingIds.includes(fresh.id));
     assert.equal((await store.getStats()).evictedCount, 1);
+  });
+});
+
+test('failed-permanent retention visibility clears when age eviction removes the item', async () => {
+  await withTempDirectory(async (directory) => {
+    let currentTime = 1700000000000;
+    const store = await createStore(directory, {
+      maxItemAgeMs: 1000,
+      now: () => new Date(currentTime),
+    }).initialize();
+    const queued = await store.enqueue(result(1));
+    await store.markFailed(queued.id, 'permanent rejection');
+    let stats = await store.getStats();
+    assert.equal(stats.failedPermanentCount, 1);
+    assert.equal(stats.failedPermanentRetainUntil, new Date(1700000001000).toISOString());
+    currentTime += 2000;
+    await store.enqueue(result(2));
+    stats = await store.getStats();
+    assert.equal(stats.failedPermanentCount, 0);
+    assert.equal(stats.failedPermanentRetainUntil, null);
   });
 });
 

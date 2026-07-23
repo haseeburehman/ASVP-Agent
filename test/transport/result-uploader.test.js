@@ -55,7 +55,7 @@ test('uploader compresses, encrypts, uploads, and marks a queue item delivered',
     const item = await harness.resultStore.enqueue(original);
     const summary = await harness.uploader.drain();
 
-    assert.deepEqual(summary, { attempted: 1, delivered: 1, requeued: 0, failedPermanent: 0, interrupted: 0 });
+    assert.deepEqual(summary, { attempted: 1, delivered: 1, requeued: 0, authFailures: 0, failedPermanent: 0, interrupted: 0 });
     assert.equal((await harness.resultStore.getStats()).deliveredCount, 1);
     assert.equal(harness.transport.receivedUploads.length, 1);
     const wire = harness.transport.receivedUploads[0];
@@ -92,6 +92,7 @@ test('authentication failures remain retryable rather than discarding queued dat
     await harness.resultStore.enqueue({ collector: 'apps', status: 'success' });
     const summary = await harness.uploader.drain();
     assert.equal(summary.requeued, 1);
+    assert.equal(summary.authFailures, 1);
     assert.equal((await harness.resultStore.getStats()).failedPermanentCount, 0);
   } finally {
     await harness.cleanup();

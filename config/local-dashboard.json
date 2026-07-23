@@ -1,0 +1,11 @@
+{
+  "server": {
+    "mode": "mock",
+    "url": "mock://local-management-server"
+  },
+  "dashboard": {
+    "enabled": true,
+    "port": 4180,
+    "bindAddress": "127.0.0.1"
+  }
+}

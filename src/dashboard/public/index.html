@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ASVP Agent Console</title>
+  <style>
+    :root{color-scheme:dark;--bg:#080b10;--panel:#10161f;--line:#243041;--text:#d7e1ec;--muted:#8190a3;--green:#51e39a;--blue:#6cb6ff;--amber:#ffcc66;--red:#ff6b7a;--shadow:0 18px 50px #0008}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 10% 0,#122033 0,transparent 35%),var(--bg);color:var(--text);font:14px/1.45 Inter,Segoe UI,sans-serif;height:100vh;overflow:hidden}.shell{height:100%;display:grid;grid-template-columns:310px 1fr;grid-template-rows:1fr}.sidebar{background:#0c1119e8;border-right:1px solid var(--line);padding:22px;overflow:auto}.brand{display:flex;align-items:center;gap:12px;margin-bottom:22px}.mark{width:38px;height:38px;border:1px solid #3c5671;background:linear-gradient(135deg,#17324c,#101820);display:grid;place-items:center;color:var(--green);font:bold 17px ui-monospace;border-radius:9px;box-shadow:0 0 28px #51e39a18}.brand h1{font-size:15px;letter-spacing:.09em;margin:0}.brand small{display:block;color:var(--muted);letter-spacing:.04em}.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.stat{padding:10px;background:#151c26;border:1px solid #202c3b;border-radius:7px;min-width:0}.stat span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em}.stat strong{display:block;overflow:hidden;text-overflow:ellipsis;font:12px ui-monospace;margin-top:4px}.state{color:var(--green)}h2{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:#9eacc0;margin:22px 0 10px}label{display:block;color:var(--muted);font-size:11px;margin:10px 0 5px}input,select,textarea{width:100%;background:#090d13;border:1px solid #293649;color:var(--text);border-radius:6px;padding:9px;font:12px ui-monospace;outline:none}textarea{min-height:62px;resize:vertical}input:focus,select:focus,textarea:focus{border-color:#4b7197;box-shadow:0 0 0 2px #4b719722}.buttons{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.buttons.config{grid-template-columns:1fr}button{border:1px solid #34465d;background:#182231;color:#dce9f7;border-radius:6px;padding:8px;cursor:pointer;font-weight:650}button:hover{border-color:#5c7899;background:#202e40}button.primary{border-color:#24784e;background:#14452f;color:#a9f5cf}button.danger{border-color:#743642;background:#3b1d25;color:#ffbac2}.main{min-width:0;display:grid;grid-template-rows:auto 1fr auto;padding:18px 22px 20px;gap:12px}.topbar{display:flex;align-items:center;justify-content:space-between}.topbar .connection{font:12px ui-monospace;color:var(--muted)}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--amber);margin-right:7px;box-shadow:0 0 10px currentColor}.terminal{background:#070a0f;border:1px solid #1e2a38;border-radius:10px;box-shadow:var(--shadow);overflow:auto;padding:15px 18px;font:12px/1.58 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.line{margin:0 0 3px}.line .time{color:#526174;margin-right:9px}.line.info{color:#c9d8e8}.line.warn{color:var(--amber)}.line.error{color:var(--red)}.line.result{color:var(--blue);border-left:2px solid #315f8f;padding-left:10px;margin:9px 0}.line.command{color:var(--green);margin-top:8px}.paused{position:fixed;right:35px;top:68px;background:#473713;color:#ffd77d;border:1px solid #85671e;padding:5px 10px;border-radius:20px;font-size:11px;display:none}.prompt{display:flex;align-items:center;background:#0c121a;border:1px solid #263548;border-radius:8px;padding:4px 11px;box-shadow:0 10px 30px #0005}.prompt span{color:var(--green);font:bold 14px ui-monospace}.prompt input{border:0;background:transparent;font-size:13px;padding:10px;box-shadow:none}.hint{color:var(--muted);font:11px ui-monospace}.toast{position:fixed;right:26px;bottom:72px;padding:10px 14px;background:#142131;border:1px solid #39536e;border-radius:7px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}.toast.show{opacity:1;transform:none}@media(max-width:850px){body{overflow:auto}.shell{display:block;height:auto}.sidebar{border-right:0;border-bottom:1px solid var(--line)}.main{height:70vh}}
+    /* Independent page and live-terminal scrolling at normal browser zoom. */
+    html{min-width:1180px;overflow:auto}
+    body{height:auto;min-height:100vh;overflow:auto;font-size:16px}
+    .shell{height:auto;min-height:100vh;grid-template-columns:360px minmax(820px,1fr);grid-template-rows:minmax(760px,100vh)}
+    .sidebar{overflow:visible;padding:26px}
+    .main{height:100vh;min-height:760px;grid-template-rows:auto minmax(0,1fr) auto;padding:24px 28px 26px}
+    .terminal{min-height:0;overflow-y:scroll;overflow-x:auto;font-size:14px;line-height:1.65;scrollbar-gutter:stable}
+    .stat strong,input,select,textarea{font-size:13px}
+    .prompt input{font-size:15px}
+    .guide{margin:0 0 18px;border:1px solid #2c4057;border-radius:8px;background:#101923;padding:10px 12px;color:#b9c8d9;font-size:12px}
+    .guide summary{cursor:pointer;color:#8fd5ff;font-weight:700;letter-spacing:.04em}
+    .guide h3{font-size:12px;color:#d7e7f8;margin:13px 0 4px}.guide p,.guide ol{margin:5px 0}.guide code{color:#79e5ad}.mode-help{margin:6px 0 10px;color:#9fb0c3;font-size:11px;line-height:1.45}.mode-help strong{color:#ffcc66}.connection-good{color:var(--green)!important}.connection-bad{color:var(--red)!important}.connection-wait{color:var(--amber)!important}.task-panel{margin-top:12px;padding:12px;border:1px solid #293b50;border-radius:8px;background:#0c141e}.task-panel[aria-disabled="true"]{opacity:.55}.task-warning{color:var(--amber);font-size:11px;margin:6px 0}.inline-result{font-size:11px;color:var(--muted);margin-top:7px;overflow-wrap:anywhere}
+    @media(max-width:850px){html{min-width:0}.shell{min-width:0;grid-template-rows:auto}.main{height:75vh;min-height:620px}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="mark">A&gt;</div><div><h1>ASVP AGENT</h1><small>LOCAL OPERATOR CONSOLE</small></div></div>
+    <div class="status-grid">
+      <div class="stat"><span>Agent state</span><strong id="state" class="state">connecting</strong></div>
+      <div class="stat"><span>Server state</span><strong id="serverState">—</strong></div>
+      <div class="stat"><span>Queue</span><strong id="queue">0</strong></div>
+      <div class="stat"><span>Uptime</span><strong id="uptime">0s</strong></div>
+      <div class="stat" style="grid-column:1/3"><span>Agent ID</span><strong id="agentId">—</strong></div>
+      <div class="stat" style="grid-column:1/3"><span>Connected server</span><strong id="connectedServerUrl">—</strong></div>
+      <div class="stat"><span>Heartbeat</span><strong id="heartbeat">—</strong></div>
+      <div class="stat"><span>Last poll</span><strong id="poll">—</strong></div>
+      <div class="stat" style="grid-column:1/3"><span>Upload authentication</span><strong id="authHealth">—</strong></div>
+      <div class="stat" style="grid-column:1/3"><span>Permanent result failures</span><strong id="permanentFailures">0</strong></div>
+    </div>
+    <details class="guide" open>
+      <summary>How to configure and test</summary>
+      <h3>1. Local testing</h3><p>Keep <code>mock</code> mode. It needs no server or credentials. Run <code>scan os-info</code> in the terminal.</p>
+      <h3>2. Real management server</h3><p>Select <code>http</code> and enter the server API URL. This local test server uses <code>http://127.0.0.1:8080</code>; every non-loopback deployment must use HTTPS, for example <code>https://manager.company.local</code>.</p>
+      <h3>3. Credentials</h3><p>You do not paste an auth token here. On Start/Restart, registration receives the agent ID, auth token, and encryption key from the server and stores them in the OS keychain or restricted identity file.</p>
+      <h3>4. Network authorization</h3><p>Add only CIDRs you own or are authorized to test, one per line, such as <code>192.168.1.0/24</code>. Then Apply &amp; Restart before running <code>scan network-scan --target 192.168.1.10 --ports 22,80,443</code>.</p>
+      <h3>5. Dependency scanning</h3><p>Add project directories under SCA paths, one per line, such as <code>C:\Projects</code>. The agent never scans the whole disk by default.</p>
+    </details>
+    <h2>Lifecycle</h2>
+    <div class="buttons"><button data-action="start" class="primary">Start</button><button data-action="stop" class="danger">Stop</button><button data-action="restart">Restart</button></div>
+    <div class="buttons config" style="margin-top:8px"><button id="testConnection">Test Connection</button></div>
+    <div id="connectionResult" class="inline-result">Runs one authenticated heartbeat immediately.</div>
+    <h2>Test configuration</h2>
+    <label for="serverMode">Server mode</label><select id="serverMode"><option value="mock">mock</option><option value="http">http</option></select>
+    <div id="modeHelp" class="mode-help"></div>
+    <label for="serverUrl">Server URL</label><input id="serverUrl" placeholder="https://management.example">
+    <label for="cidrs">Network allowlist CIDRs (one per line)</label><textarea id="cidrs" spellcheck="false"></textarea>
+    <label for="paths">SCA scan paths (one per line)</label><textarea id="paths" spellcheck="false"></textarea>
+    <div class="buttons config"><button id="apply" class="primary">Apply &amp; Restart Agent</button></div>
+    <p class="hint">Changes are written to a restricted dashboard override. Security settings never hot-reload.</p>
+    <h2>Create central-server task</h2>
+    <section id="taskPanel" class="task-panel" aria-disabled="true">
+      <label for="taskCollector">Collector</label><select id="taskCollector"></select>
+      <div id="taskRemoteFields" hidden>
+        <label for="taskTargets">Targets (comma-separated IPs/CIDRs)</label><input id="taskTargets" placeholder="192.168.1.10">
+        <label for="taskPorts">Ports (optional)</label><input id="taskPorts" placeholder="22,80,443">
+      </div>
+      <div id="taskWarning" class="task-warning"></div>
+      <div class="buttons config"><button id="createTask" class="primary">Create Task</button></div>
+      <div id="taskResult" class="inline-result"></div>
+    </section>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div><strong>LIVE EVENT STREAM</strong><div class="hint">Structured agent logs and collector results</div></div><div class="connection"><i class="dot"></i><span id="socketState">connecting</span></div></div>
+    <div id="terminal" class="terminal" aria-live="polite"><div class="line info">Waiting for dashboard WebSocket…</div></div>
+    <div class="prompt"><span>asvp&gt;</span><input id="command" autocomplete="off" spellcheck="false" placeholder="scan os-info | status | register"></div>
+  </main>
+</div>
+<div id="paused" class="paused">AUTOSCROLL PAUSED</div><div id="toast" class="toast"></div>
+<script>
+(() => {
+  const token = new URLSearchParams(location.search).get('token');
+  const terminal = document.querySelector('#terminal');
+  const commandInput = document.querySelector('#command');
+  const pausedBadge = document.querySelector('#paused');
+  const remoteCollectors = new Set(['network-scan','tls-checks']);
+  let autoScroll = true, hovering = false, sequence = 0, currentConfig, configDirty = false;
+  const history = []; let historyIndex = 0;
+  const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${wsProtocol}//${location.host}/ws?token=${encodeURIComponent(token || '')}`);
+  const el = id => document.querySelector(`#${id}`);
+  const fmtTime = value => value ? new Date(value).toLocaleTimeString() : '—';
+  function line(kind, value) {
+    const node = document.createElement('div'); node.className = `line ${kind}`;
+    const time = document.createElement('span'); time.className = 'time'; time.textContent = new Date().toLocaleTimeString();
+    const text = document.createElement('span'); text.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    node.append(time, text); terminal.append(node);
+    if (terminal.children.length > 1200) terminal.firstElementChild.remove();
+    if (autoScroll && !hovering) terminal.scrollTop = terminal.scrollHeight;
+  }
+  function toast(message) { const node=el('toast'); node.textContent=message; node.classList.add('show'); setTimeout(()=>node.classList.remove('show'),2200); }
+  function formatLog(record){const parts=[record.msg||'Agent event'];if(record.taskCount!=null)parts.push(`tasks=${record.taskCount}`);if(record.currentQueueSize!=null)parts.push(`queue=${record.currentQueueSize}`);if(record.collector)parts.push(`collector=${record.collector}`);if(record.status)parts.push(`status=${record.status}`);if(record.queueItemId)parts.push(`queueItem=${record.queueItemId}`);if(record.latencyMs!=null)parts.push(`latency=${record.latencyMs}ms`);if(record.err?.message)parts.push(`error=${record.err.message}`);return parts.join(' · ');}
+  function snapshot(data) {
+    el('state').textContent=data.state||'unknown'; el('queue').textContent=data.queueDepth??0; el('connectedServerUrl').textContent=`${data.connectionMode||'—'} · ${data.serverUrl||'—'}`;
+    el('uptime').textContent=`${data.uptimeSeconds??0}s`; el('agentId').textContent=data.agentId||'—'; el('heartbeat').textContent=`${fmtTime(data.lastHeartbeatAt)} ${data.lastHeartbeatError?'✕':'✓'}`; el('poll').textContent=`${fmtTime(data.lastPollAt)} ${data.lastPollError?'✕':'✓'}`;
+    const serverState=el('serverState'); serverState.textContent=data.serverConnectionState||'unknown'; serverState.className=['connected','mock'].includes(data.serverConnectionState)?'connection-good':['unreachable','authentication-degraded'].includes(data.serverConnectionState)?'connection-bad':'connection-wait';
+    const authHealth=el('authHealth');authHealth.textContent=data.healthState==='authentication-degraded'?`DEGRADED · ${data.consecutiveUploadAuthFailures}/${data.authFailureThreshold} consecutive 401/403 uploads`:`healthy · ${data.consecutiveUploadAuthFailures||0} consecutive failures`;authHealth.className=data.healthState==='authentication-degraded'?'connection-bad':'connection-good';
+    el('permanentFailures').textContent=data.failedPermanentCount>0?`${data.failedPermanentCount} result(s); retained until ${data.failedPermanentRetainUntil?new Date(data.failedPermanentRetainUntil).toLocaleString():'age eviction'}`:'0';
+    if (data.config) setConfig(data.config); if(data.collectors)populateCollectors(data.collectors); updateTaskPanel(data.taskCreation);
+  }
+  function populateCollectors(collectors){const selected=el('taskCollector').value;el('taskCollector').replaceChildren(...collectors.map(item=>{const option=document.createElement('option');option.value=item.name;option.textContent=item.warning?`${item.name} ⚠`:item.name;option.dataset.warning=item.warning||'';return option;}));if([...el('taskCollector').options].some(option=>option.value===selected))el('taskCollector').value=selected;updateTaskFields();}
+  function updateTaskPanel(taskCreation){const enabled=Boolean(taskCreation?.enabled);el('taskPanel').setAttribute('aria-disabled',String(!enabled));el('createTask').disabled=!enabled;el('taskWarning').textContent=enabled?(el('taskCollector').selectedOptions[0]?.dataset.warning||''):(taskCreation?.reason||'Task creation requires a real connected server');}
+  function updateTaskFields(){const remote=remoteCollectors.has(el('taskCollector').value);el('taskRemoteFields').hidden=!remote;el('taskWarning').textContent=el('taskPanel').getAttribute('aria-disabled')==='true'?'Task creation requires a real connected server':(el('taskCollector').selectedOptions[0]?.dataset.warning||'');}
+  function updateModeHelp(){el('modeHelp').innerHTML=el('serverMode').value==='mock'?'<strong>Mock:</strong> local demo mode; no real server or credentials required.':'<strong>HTTP:</strong> use http://127.0.0.1:8080 only for the local test server; non-loopback servers require https://. Registration supplies credentials automatically.';}
+  function setConfig(config, force=false) { if(configDirty&&!force)return; currentConfig=config; el('serverMode').value=config.server.mode; el('serverUrl').value=config.server.url; el('cidrs').value=config.networkScanAllowedCidrs.join('\n'); el('paths').value=config.scaDepsScanPaths.join('\n'); configDirty=false; updateModeHelp(); }
+  function send(message) { socket.send(JSON.stringify({id:`ui-${++sequence}`,...message})); }
+  socket.addEventListener('open',()=>{el('socketState').textContent='connected';document.querySelector('.dot').style.background='#51e39a';line('info','Dashboard WebSocket authenticated');});
+  socket.addEventListener('close',()=>{el('socketState').textContent='disconnected';document.querySelector('.dot').style.background='#ff6b7a';line('error','Dashboard connection closed');});
+  socket.addEventListener('message',event=>{const message=JSON.parse(event.data); if(message.type==='snapshot')snapshot(message.data); else if(message.type==='log'){const level=message.data.level>=50?'error':message.data.level>=40?'warn':'info';line(level,formatLog(message.data));} else if(message.type==='result')line('result',message.data); else if(message.type==='config')setConfig(message.data,true); else if(message.ok===false){const text=message.error?.message||'Operation failed';line('error',text);toast(text);if(message.type==='task-result')el('taskResult').textContent=text;if(message.type==='connection-result')el('connectionResult').textContent=`Failed: ${text}`;} else if(message.type==='command-result')line('result',message.output); else if(message.type==='task-result'){const text=`Central task created: ${message.taskId} (${message.collectorName})`;el('taskResult').textContent=text;line('result',text);toast('Task created');} else if(message.type==='connection-result'){const text=`Connected to ${message.serverUrl} in ${message.latencyMs}ms`;el('connectionResult').textContent=text;line('info',text);toast('Connection successful');} else if(message.type==='config-result'){if(message.serverChanged){toast('Server changed; registering agent');send({type:'command',command:'register'});}else{toast('Configuration saved; restarting agent');send({type:'lifecycle',action:'restart'});}} else if(message.type.endsWith('-result'))toast(`${message.action||'Operation'} complete`);});
+  commandInput.addEventListener('keydown',event=>{if(event.key==='Enter'){const command=commandInput.value.trim();if(!command)return;history.push(command);historyIndex=history.length;line('command',`asvp> ${command}`);send({type:'command',command});commandInput.value='';}else if(event.key==='ArrowUp'){event.preventDefault();if(historyIndex>0)commandInput.value=history[--historyIndex];}else if(event.key==='ArrowDown'){event.preventDefault();commandInput.value=historyIndex<history.length-1?history[++historyIndex]:(historyIndex=history.length,'');}});
+  document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',()=>send({type:'lifecycle',action:button.dataset.action})));
+  el('testConnection').addEventListener('click',()=>{el('connectionResult').textContent='Testing authenticated heartbeat…';send({type:'connection.test'});});
+  el('taskCollector').addEventListener('change',updateTaskFields);
+  el('createTask').addEventListener('click',()=>{const targets=el('taskTargets').value.split(/\r?\n|,/).map(value=>value.trim()).filter(Boolean);const portText=el('taskPorts').value.trim();const task={collectorName:el('taskCollector').value};if(remoteCollectors.has(task.collectorName)){task.targets=targets;if(portText)task.ports=portText.split(',').map(value=>Number(value.trim()));}el('taskResult').textContent='Creating task on central server…';send({type:'task.create',task});});
+  ['serverMode','serverUrl','cidrs','paths'].forEach(id=>el(id).addEventListener('input',()=>{configDirty=true;if(id==='serverMode')updateModeHelp();}));
+  el('apply').addEventListener('click',()=>{const config={server:{mode:el('serverMode').value,url:el('serverUrl').value.trim()},networkScanAllowedCidrs:el('cidrs').value.split(/\r?\n|,/).map(v=>v.trim()).filter(Boolean),scaDepsScanPaths:el('paths').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)};send({type:'config.save',config});});
+  terminal.addEventListener('mouseenter',()=>{hovering=true;pausedBadge.style.display='block'});terminal.addEventListener('mouseleave',()=>{hovering=false;pausedBadge.style.display=autoScroll?'none':'block';if(autoScroll)terminal.scrollTop=terminal.scrollHeight});terminal.addEventListener('scroll',()=>{const nearBottom=terminal.scrollHeight-terminal.scrollTop-terminal.clientHeight<35;autoScroll=nearBottom;pausedBadge.style.display=(!autoScroll||hovering)?'block':'none'});
+})();
+</script>
+</body>
+</html>

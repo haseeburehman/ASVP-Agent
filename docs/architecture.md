@@ -10,6 +10,8 @@ The agent will use a single application runtime with multiple thin hosts:
 
 This design avoids maintaining separate daemon and CLI implementations. It also keeps the process observable and lets `systemd`, Windows Service Control Manager, or `launchd` own restart policy, startup ordering, and shutdown signals.
 
+The service layer is implemented under `src/service/`. `asvp-agent service install|uninstall|status` dispatches to native adapters, but every generated definition invokes the same `node <absolute-bin>/asvp-agent.js --config <absolute-config> run` foreground entry point. No service-manager behavior exists inside `AgentRuntime`.
+
 ## Collector boundary
 
 Each collector will publish metadata, validate collector-specific options, report platform and privilege requirements, accept a bounded task and cancellation signal, and return a normalized result envelope. The registry will load an explicit allowlist of built-in plugins; arbitrary runtime package loading should not be enabled by default.

@@ -1,0 +1,186 @@
+name: Build native releases
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    env:
+      PACKAGE_PLATFORM: win
+      PACKAGE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install target keytar native binding
+        if: matrix.arch == 'arm64'
+        shell: cmd
+        run: npm rebuild keytar --arch=arm64
+      - run: npm test
+      - run: npm run package:binary
+      - name: Verify packaged binary and Windows Credential Manager
+        if: matrix.arch == 'x64'
+        shell: cmd
+        env:
+          REQUIRE_PACKAGED_KEYCHAIN: 'true'
+        run: npm run package:verify
+      - name: Record ARM64 execution limitation
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: Write-Output 'ARM64 was generated on the required windows-latest x64 runner. It cannot be executed there; native-addon and installer execution remain release-gating manual checks on Windows ARM64.'
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $binary = (Resolve-Path "dist/win-${{ matrix.arch }}/asvp-agent-$version-win-${{ matrix.arch }}.exe").Path
+          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" "/DMyVersion=$version" "/DMyArch=${{ matrix.arch }}" "/DMyBinary=$binary" scripts/packaging/windows/asvp-agent.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: |
+            dist/win-${{ matrix.arch }}/asvp-agent-*.exe
+            dist/win-${{ matrix.arch }}/config/default.json
+            dist/win-${{ matrix.arch }}/public/index.html
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_PLATFORM: linux
+      PACKAGE_ARCH: x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install keychain and packaging prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev gnome-keyring dbus-x11 ruby-dev rpm
+      - run: sudo gem install fpm --no-document
+      - run: npm ci
+      - run: npm test
+      - run: npm run package:binary
+      - name: Verify packaged binary and Secret Service keychain
+        run: dbus-run-session -- sh -c 'eval "$(gnome-keyring-daemon --start --components=secrets)"; REQUIRE_PACKAGED_KEYCHAIN=true npm run package:verify'
+      - name: Build deb and rpm
+        run: |
+          version=$(node -p "require('./package.json').version")
+          root="$PWD/dist/linux-package-root"
+          install -Dm755 "dist/linux-x64/asvp-agent-$version-linux-x64" "$root/opt/asvp-agent/asvp-agent"
+          install -Dm640 config/default.json "$root/etc/asvp-agent/config.json"
+          install -Dm644 src/dashboard/public/index.html "$root/opt/asvp-agent/public/index.html"
+          mkdir -p "$root/opt/asvp-agent/var" "$root/usr/local/bin"
+          ln -s /opt/asvp-agent/asvp-agent "$root/usr/local/bin/asvp-agent"
+          for type in deb rpm; do
+            fpm -s dir -t "$type" -n asvp-agent -v "$version" --architecture x86_64 \
+              --maintainer 'ASVP' --description 'ASVP internal network scanning and posture collection agent' \
+              --after-install scripts/packaging/linux/postinstall.sh \
+              --before-remove scripts/packaging/linux/preremove.sh \
+              -C "$root" -p "dist/asvp-agent-$version-linux-x64.$type" .
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: |
+            dist/linux-x64/asvp-agent-*
+            dist/asvp-agent-*.deb
+            dist/asvp-agent-*.rpm
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            os: macos-13
+          - arch: arm64
+            os: macos-latest
+    env:
+      PACKAGE_PLATFORM: macos
+      PACKAGE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Assert native runner architecture
+        shell: bash
+        run: test "$(node -p process.arch)" = '${{ matrix.arch }}'
+      - run: npm ci
+      - run: npm test
+      - run: npm run package:binary
+      - name: Verify packaged binary and macOS Keychain
+        env:
+          REQUIRE_PACKAGED_KEYCHAIN: 'true'
+        run: npm run package:verify
+      - name: Build unsigned pkg
+        run: |
+          version=$(node -p "require('./package.json').version")
+          root="$PWD/dist/macos-package-root"
+          scripts="$PWD/dist/macos-package-scripts"
+          mkdir -p "$root/Library/Application Support/ASVP Agent/config" "$root/Library/Application Support/ASVP Agent/public" "$root/Library/Application Support/ASVP Agent/var" "$root/usr/local/bin" "$scripts"
+          install -m755 "dist/macos-${{ matrix.arch }}/asvp-agent-$version-macos-${{ matrix.arch }}" "$root/Library/Application Support/ASVP Agent/asvp-agent"
+          install -m640 config/default.json "$root/Library/Application Support/ASVP Agent/config/default.json"
+          install -m644 src/dashboard/public/index.html "$root/Library/Application Support/ASVP Agent/public/index.html"
+          ln -s '/Library/Application Support/ASVP Agent/asvp-agent' "$root/usr/local/bin/asvp-agent"
+          install -m755 scripts/packaging/macos/postinstall "$scripts/postinstall"
+          pkgbuild --root "$root" --scripts "$scripts" --identifier com.asvp.agent --version "$version" "dist/asvp-agent-component.pkg"
+          productbuild --package "dist/asvp-agent-component.pkg" "dist/asvp-agent-$version-macos-${{ matrix.arch }}.pkg"
+          rm "dist/asvp-agent-component.pkg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            dist/macos-${{ matrix.arch }}/asvp-agent-*
+            dist/asvp-agent-*.pkg
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Generate release description
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Downloads
+
+          - `*-windows-x64-setup.exe` — Windows x64 Inno Setup installer
+          - `*-windows-arm64-setup.exe` — Windows ARM64 Inno Setup installer
+          - `*-win-x64.exe` / `*-win-arm64.exe` — standalone Windows binaries
+          - `*.deb` — generic Debian/Ubuntu x64 package
+          - `*.rpm` — generic RHEL/Fedora-family x64 package
+          - `*-linux-x64` — standalone Linux x64 binary
+          - `*-macos-x64.pkg` / `*-macos-arm64.pkg` — macOS native installers
+          - `*-macos-x64` / `*-macos-arm64` — standalone macOS binaries
+
+          **Security notice:** Windows artifacts are not code-signed and may trigger SmartScreen. macOS artifacts are unsigned and unnotarized and require manual approval in System Settings. See the README for exact steps.
+          EOF
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: release-assets/*

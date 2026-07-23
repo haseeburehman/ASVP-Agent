@@ -180,11 +180,16 @@ export class ResultStore {
     return this.#serialize(async () => {
       const items = await this.#readItemsWithSizes();
       const metrics = await this.#readMetrics();
+      const failedPermanent = items.filter(({ item }) => item.state === 'failed-permanent');
+      const failedPermanentRetainUntil = failedPermanent.length > 0
+        ? new Date(Math.min(...failedPermanent.map(({ item }) => new Date(item.enqueuedAt).getTime() + this.maxItemAgeMs))).toISOString()
+        : null;
       return {
         pendingCount: items.filter(({ item }) => item.state === 'pending').length,
         inFlightCount: items.filter(({ item }) => item.state === 'in-flight').length,
         deliveredCount: items.filter(({ item }) => item.state === 'delivered').length,
-        failedPermanentCount: items.filter(({ item }) => item.state === 'failed-permanent').length,
+        failedPermanentCount: failedPermanent.length,
+        failedPermanentRetainUntil,
         totalItems: items.length,
         totalBytes: items.reduce((total, entry) => total + entry.size, 0),
         evictedCount: metrics.evictedCount,

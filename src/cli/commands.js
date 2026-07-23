@@ -11,6 +11,7 @@ import { CollectorRegistry } from '../core/collector-registry.js';
 import { TaskRunner } from '../core/task-runner.js';
 import { CredentialStore } from '../security/credentials.js';
 import { ResultStore } from '../storage/result-store.js';
+import { runServiceCommand } from '../service/index.js';
 import { ApiClient, loadOrRegisterIdentity } from '../transport/api-client.js';
 import { createLogger, flushLogger } from '../utils/logger.js';
 
@@ -27,7 +28,7 @@ async function createContext(options) {
 
 const REMOTE_COLLECTORS = new Set(['network-scan', 'tls-checks']);
 
-function parseCommaSeparated(value, label) {
+export function parseCommaSeparated(value, label) {
   const values = value.split(',').map((item) => item.trim()).filter(Boolean);
   if (values.length === 0) throw new Error(`${label} must contain at least one value`);
   return values;
@@ -39,6 +40,47 @@ export function parsePorts(value) {
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid TCP port "${item}"`);
     return port;
   });
+}
+
+function addScanOptions(command) {
+  return command
+    .requiredOption('--collector <name>', 'registered collector name')
+    .option('--target <targets>', 'comma-separated IP addresses or CIDRs')
+    .option('--ports <ports>', 'comma-separated TCP ports', parsePorts)
+    .option('--json', 'print the full normalized result as JSON')
+    .option('--no-queue', 'do not persist the result in the durable queue');
+}
+
+function tokenizeCommand(input) {
+  const tokens = [];
+  const expression = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|([^\s]+)/g;
+  let match;
+  while ((match = expression.exec(input.trim()))) tokens.push(match[1] ?? match[2] ?? match[3]);
+  return tokens;
+}
+
+export function parseOperatorCommand(input) {
+  const tokens = tokenizeCommand(input);
+  const commandName = tokens.shift();
+  if (!['scan', 'status', 'register'].includes(commandName)) throw new Error(`Unknown command "${commandName ?? ''}"`);
+  if (commandName !== 'scan') {
+    if (tokens.length > 0) throw new Error(`${commandName} does not accept arguments`);
+    return { name: commandName };
+  }
+  if (tokens[0] && !tokens[0].startsWith('-')) tokens.unshift('--collector');
+  const parser = addScanOptions(new Command())
+    .exitOverride()
+    .configureOutput({ writeErr() {} });
+  parser.parse(['node', 'scan', ...tokens]);
+  const options = parser.opts();
+  return {
+    name: 'scan',
+    collectorName: options.collector,
+    targets: options.target ? parseCommaSeparated(options.target, '--target') : undefined,
+    ports: options.ports,
+    queue: options.queue,
+    json: options.json ?? false,
+  };
 }
 
 function createResultStore(config, logger, cwd) {
@@ -140,6 +182,12 @@ export function createProgram({ contextFactory = createContext } = {}) {
     .action(async (_, command) => {
       const { config } = command.optsWithGlobals();
       const context = await contextFactory({ config });
+      if (context.config.dashboard.enabled) {
+        await flushLogger(context.logger);
+        const { startDashboardCommand } = await import('../dashboard/server.js');
+        await startDashboardCommand({ configPath: config });
+        return;
+      }
       const lifecycle = new AgentLifecycle(context);
       await lifecycle.start();
     });
@@ -182,6 +230,11 @@ export function createProgram({ contextFactory = createContext } = {}) {
           queueDepth: status?.queueDepth ?? 0,
           queueEvictedCount: status?.queueEvictedCount ?? 0,
           queueLastEvictedAt: status?.queueLastEvictedAt ?? null,
+          failedPermanentCount: status?.failedPermanentCount ?? 0,
+          failedPermanentRetainUntil: status?.failedPermanentRetainUntil ?? null,
+          consecutiveUploadAuthFailures: status?.consecutiveUploadAuthFailures ?? 0,
+          authFailureThreshold: status?.authFailureThreshold ?? config.collectors.upload.authFailureThreshold,
+          healthState: status?.healthState ?? 'unknown',
           state: status?.state ?? 'not-running-or-no-status',
           agentVersion: status?.agentVersion ?? version,
         }, null, 2)}\n`);
@@ -190,13 +243,8 @@ export function createProgram({ contextFactory = createContext } = {}) {
       }
     });
 
-  program.command('scan')
-    .description('manually run one collector through the production task pipeline')
-    .requiredOption('--collector <name>', 'registered collector name')
-    .option('--target <targets>', 'comma-separated IP addresses or CIDRs')
-    .option('--ports <ports>', 'comma-separated TCP ports', parsePorts)
-    .option('--json', 'print the full normalized result as JSON')
-    .option('--no-queue', 'do not persist the result in the durable queue')
+  addScanOptions(program.command('scan')
+    .description('manually run one collector through the production task pipeline'))
     .action(async (options, command) => {
       const { config: configPath } = command.optsWithGlobals();
       const { config, logger } = await contextFactory({ config: configPath });
@@ -223,6 +271,45 @@ export function createProgram({ contextFactory = createContext } = {}) {
         process.removeListener('SIGTERM', handleSignal);
         await flushLogger(logger);
       }
+    });
+
+  const diagnostics = program.command('diagnostics').description('run deployment diagnostics');
+  diagnostics.command('credentials')
+    .description('verify the active credential backend with a temporary write/read/delete round trip')
+    .option('--require-keychain', 'fail unless the OS keychain backend is loaded and operational')
+    .action(async (options, command) => {
+      const { config: configPath } = command.optsWithGlobals();
+      const { config, logger } = await contextFactory({ config: configPath });
+      try {
+        const credentialStore = await new CredentialStore({
+          identityPath: config.storage.identityPath,
+          logger,
+        }).initialize();
+        const result = await credentialStore.diagnoseBackend();
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        if (options.requireKeychain && (result.backend !== 'keychain' || !result.operational)) process.exitCode = 1;
+      } finally {
+        await flushLogger(logger);
+      }
+    });
+
+  const service = program.command('service').description('install, uninstall, or inspect the native OS service');
+  for (const action of ['install', 'uninstall', 'status']) {
+    service.command(action)
+      .description(`${action} the ASVP agent native service`)
+      .action(async (_, command) => {
+        const { config: configPath } = command.optsWithGlobals();
+        const result = await runServiceCommand(action, { configPath });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      });
+  }
+
+  program.command('dashboard')
+    .description('run the agent with the local operator dashboard')
+    .action(async (_, command) => {
+      const { config: configPath } = command.optsWithGlobals();
+      const { startDashboardCommand } = await import('../dashboard/server.js');
+      await startDashboardCommand({ configPath });
     });
 
   return program;

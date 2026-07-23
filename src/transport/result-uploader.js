@@ -57,7 +57,8 @@ export class ResultUploader {
     return {
       attempted: outcomes.length,
       delivered: outcomes.filter((outcome) => outcome === 'delivered').length,
-      requeued: outcomes.filter((outcome) => outcome === 'requeued').length,
+      requeued: outcomes.filter((outcome) => ['requeued', 'auth-failure'].includes(outcome)).length,
+      authFailures: outcomes.filter((outcome) => outcome === 'auth-failure').length,
       failedPermanent: outcomes.filter((outcome) => outcome === 'failed-permanent').length,
       interrupted: outcomes.filter((outcome) => outcome === 'interrupted').length,
     };
@@ -113,8 +114,9 @@ export class ResultUploader {
         return 'failed-permanent';
       }
       await this.resultStore.requeue(item.id, error);
-      this.logger?.warn({ err: error, queueItemId: item.id }, 'Result upload failed transiently; item returned to pending');
-      return 'requeued';
+      const authenticationFailure = [401, 403].includes(Number(error?.status));
+      this.logger?.warn({ err: error, queueItemId: item.id, authenticationFailure }, 'Result upload failed transiently; item returned to pending');
+      return authenticationFailure ? 'auth-failure' : 'requeued';
     }
   }
 }

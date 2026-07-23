@@ -1,0 +1,16 @@
+{
+  "server": {
+    "mode": "http",
+    "url": "http://127.0.0.1:8080"
+  },
+  "dashboard": {
+    "enabled": false,
+    "port": 4180,
+    "bindAddress": "127.0.0.1"
+  },
+  "storage": {
+    "identityPath": "var/central-test/identity.json",
+    "statusPath": "var/central-test/status.json",
+    "queueDir": "var/central-test/queue"
+  }
+}

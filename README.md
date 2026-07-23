@@ -140,3 +140,145 @@ Remote collectors require explicit targets and those targets must be contained b
 The default configuration now uses real HTTPS transport (`server.mode: "http"`). Replace the placeholder `https://management.example.invalid` URL with the deployment's management endpoint before running the service. Local development and CI can explicitly select `server.mode: "mock"`.
 
 Pending queue results are serialized, gzip-compressed, and encrypted with AES-256-GCM immediately before upload. The encryption key is provisioned during registration and stored with the auth token through the OS keychain or restricted-file fallback. The server must explicitly acknowledge an upload with `{ "accepted": true, "queueItemId": "..." }` before the local item is marked delivered. Transient failures return items to pending; permanent payload-rejection HTTP responses mark them failed-permanent.
+
+## Local operator dashboard
+
+The dashboard is disabled by default and normal `asvp-agent run` therefore opens no dashboard port. Set `dashboard.enabled` to `true` to start it with `run`, or use the dedicated command as an explicit one-run opt-in:
+
+```sh
+node ./bin/asvp-agent.js dashboard
+```
+
+It prints a one-time URL containing a freshly generated access token. The page and WebSocket both reject requests without that token. The dashboard uses plain HTTP because it binds to the same machine and the token protects against casual access by other local processes; it is not designed or supported as a remote management interface.
+
+> **Security warning:** keep `dashboard.bindAddress` set to `127.0.0.1`. Setting it to `0.0.0.0` or another non-loopback address exposes lifecycle controls, registration, configuration, logs, and collector execution to the network. The agent emits a high-visibility warning whenever a non-loopback bind is configured.
+
+Dashboard defaults:
+
+```json
+{
+  "dashboard": {
+    "enabled": false,
+    "port": 4180,
+    "bindAddress": "127.0.0.1"
+  }
+}
+```
+
+The **Apply & Restart Agent** action writes the complete validated merged configuration to `var/dashboard-config.json` with restrictive permissions. This dashboard-owned override avoids editing a deployment-managed source config. The running lifecycle is not hot-reloaded; the UI explicitly restarts it only after the write and validation succeed. Remote scan commands still pass through the same local CIDR authorization gate as CLI and server-polled tasks.
+
+When connected to the real central server, the dashboard also provides:
+
+- A clear connected/connecting/unreachable server indicator and configured URL
+- Last heartbeat and poll success/failure indicators
+- A one-shot **Test Connection** button using the normal authenticated heartbeat path
+- A collector dropdown populated from `CollectorRegistry`
+- Central task creation through the server's `/api/admin/tasks` endpoint
+- Target/port inputs for `network-scan` and `tls-checks`
+- Warnings and refusal when no remote targets are locally authorized
+
+The task form is disabled in mock mode. In real mode, clicking **Create Task** assigns the task to this agent; its normal poll scheduler receives it, the normal task runner executes it, and the normal encrypted upload pipeline returns the result. No curl command is required.
+
+Central-server admin routes require `ADMIN_TOKEN`. Start the central server and dashboard processes with the same persistent token. The dashboard config loader reads it from the process environment, keeps it server-side, redacts it from logs, and never sends it to browser JavaScript:
+
+```powershell
+$env:ADMIN_TOKEN = "replace-with-a-long-random-secret"
+npm.cmd --prefix .\central-management-server start
+```
+
+In the dashboard process terminal:
+
+```powershell
+$env:ADMIN_TOKEN = "replace-with-the-same-long-random-secret"
+node .\bin\asvp-agent.js --config .\config\local-dashboard.json dashboard
+```
+
+## Download & Install
+
+Versioned standalone binaries and native installers are published on the repository's **GitHub Releases** page. Standalone binary names follow `asvp-agent-<version>-<platform>-<arch>` and do not require Node.js or this source tree.
+
+### Windows
+
+Download the installer matching the machine architecture:
+
+- `asvp-agent-<version>-windows-x64-setup.exe`
+- `asvp-agent-<version>-windows-arm64-setup.exe`
+
+Run the installer as Administrator. It installs under `C:\Program Files\ASVP Agent` and offers to run the existing `asvp-agent service install` command on the final page. The x64 and ARM64 packages are separate because Windows PE executables are architecture-specific. The ARM64 agent is native ARM64; its pinned WinSW 2.12.0 service wrapper is x64 because WinSW does not publish an ARM64 asset, and therefore uses Windows-on-ARM x64 emulation.
+
+**Unsigned-build warning:** these installers and executables are not Authenticode-signed because no purchased code-signing certificate is configured. Microsoft Defender SmartScreen may show **Windows protected your PC**. Verify the artifact came from the expected GitHub Release, select **More info**, confirm the displayed filename, then choose **Run anyway** only if you trust it. Do not disable SmartScreen.
+
+Credential storage remains Windows Credential Manager. A service runs as `Local Service`, so its Credential Manager scope is that service identity rather than the installing interactive user. If Credential Manager cannot be opened in that account, the existing restricted-file fallback writes beneath the service-protected `var` directory. Release CI runs `diagnostics credentials --require-keychain` from the packaged x64 executable; service-account scope must additionally be checked during the real service-install acceptance test.
+
+### Linux x64
+
+Download either package for the target package manager:
+
+```sh
+sudo apt install ./asvp-agent-<version>-linux-x64.deb
+# or
+sudo rpm -U ./asvp-agent-<version>-linux-x64.rpm
+```
+
+Package-manager scripts must not block unattended installs with prompts. Installation therefore prints, but does not automatically execute, the explicit opt-in service command:
+
+```sh
+sudo /opt/asvp-agent/asvp-agent --config /etc/asvp-agent/config.json service install
+```
+
+The `.deb` and `.rpm` are generic x64 packages rather than per-distribution builds. Test them against the exact supported distribution before production rollout.
+
+### macOS
+
+Download `asvp-agent-<version>-macos-x64.pkg` for Intel Macs or `asvp-agent-<version>-macos-arm64.pkg` for Apple silicon, then open it in Finder. The package installs under `/Library/Application Support/ASVP Agent` and prints the opt-in service command when installation completes.
+
+**Unsigned/unnotarized warning:** the package is not signed with an Apple Developer certificate and is not notarized. Gatekeeper may refuse the first launch. Do not disable Gatekeeper globally. After verifying the package came from the expected GitHub Release:
+
+1. Attempt to open the `.pkg` once.
+2. Open **System Settings → Privacy & Security**.
+3. Find the message that the ASVP package was blocked and select **Open Anyway**.
+4. Authenticate as an administrator and confirm **Open**.
+
+After installation, run:
+
+```sh
+sudo '/Library/Application Support/ASVP Agent/asvp-agent' --config '/Library/Application Support/ASVP Agent/config/default.json' service install
+```
+
+### Packaged credential verification
+
+Every executable exposes an explicit deployment diagnostic:
+
+```sh
+asvp-agent diagnostics credentials --require-keychain
+```
+
+It loads the native `keytar` binding and performs a temporary write/read/delete round trip. It exits nonzero if the process fell back to restricted-file storage or if the OS keychain is not operational. This is deliberately used in release CI so a missing native binding cannot pass silently.
+
+## Native service installation
+
+The same foreground runtime can be installed under the current OS service manager:
+
+```sh
+asvp-agent service install
+asvp-agent service status
+asvp-agent service uninstall
+```
+
+From source:
+
+```sh
+node ./bin/asvp-agent.js service install
+node ./bin/asvp-agent.js service status
+node ./bin/asvp-agent.js service uninstall
+```
+
+Installation/removal requires root or Administrator. Source installations execute `node <absolute>/bin/asvp-agent.js --config <absolute-config> run`; packaged installations execute `<absolute>/asvp-agent --config <absolute-config> run` directly. Both reach the same `run` command and foreground lifecycle—the Node runtime embedded by `@yao-pkg/pkg` does not daemonize itself. Uninstall asks before deleting `var/` data or a created Linux account. See `scripts/service/README.md` for platform paths, accounts, logs, hardening, reboot verification, and required manual install testing.
+
+## Release-build verification boundaries
+
+GitHub Actions performs builds on the corresponding OS families rather than building every installer from one host. Linux x64, Windows x64, and both macOS architectures execute the packaged binary, an `os-info` collector smoke test, and the keychain round-trip diagnostic before installer publication. Windows ARM64 is generated on the explicitly requested `windows-latest` matrix runner, which is x64; that runner cannot execute the ARM64 binary. A real Windows ARM64 machine must therefore verify the ARM64 executable, native `keytar` binding, WinSW-under-emulation service cycle, reboot persistence, and uninstall before that target is considered production-qualified.
+
+## Open manual verification item
+
+The development machine does not have `nmap` installed, so the `ssl-heartbleed` parser could not be compared with XML from a real local `nmap --script ssl-heartbleed` run. Existing fixture/parser tests pass, and the collector correctly reports `not-assessed` when nmap is absent. Before claiming production verification of that check, install a current nmap release in a controlled test environment, run it against the repository's local TLS test server, and compare the emitted `-oX -` XML with `parseHeartbleedXml()`.

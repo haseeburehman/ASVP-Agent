@@ -6,7 +6,7 @@ import { AgentRuntime } from './runtime.js';
 import { createLogger, flushLogger } from '../utils/logger.js';
 
 export class AgentLifecycle {
-  constructor({ config, version, logger, apiClient, credentialStore, resultStore, cwd = process.cwd() }) {
+  constructor({ config, version, logger, apiClient, credentialStore, resultStore, resultUploader, onResult, cwd = process.cwd() }) {
     this.config = config;
     this.version = version;
     this.logger = logger ?? createLogger({ level: config.agent.logLevel });
@@ -24,6 +24,8 @@ export class AgentLifecycle {
       logger: this.logger,
       cwd,
     });
+    this.resultUploader = resultUploader;
+    this.onResult = onResult;
     this.cwd = cwd;
     this.signalHandlers = new Map();
   }
@@ -48,6 +50,8 @@ export class AgentLifecycle {
       logger: this.logger,
       version: this.version,
       resultStore: this.resultStore,
+      resultUploader: this.resultUploader,
+      onResult: this.onResult,
       cwd: this.cwd,
     });
     this.#installSignalHandlers();
@@ -68,6 +72,13 @@ export class AgentLifecycle {
 
   getHealth() {
     return this.runtime?.getHealth() ?? { state: 'not-started' };
+  }
+
+  testConnection() {
+    if (!this.runtime || this.runtime.getHealth().state !== 'running') {
+      throw new Error('Agent must be running before testing the management-server connection');
+    }
+    return this.runtime.testConnection();
   }
 
   #installSignalHandlers() {

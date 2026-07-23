@@ -6,12 +6,18 @@
     "heartbeatPath": "/api/agents/heartbeat",
     "tasksPath": "/api/agents/tasks/poll",
     "resultsPath": "/api/agents/results",
+    "adminToken": null,
     "requestTimeoutMs": 10000
   },
   "agent": {
     "heartbeatIntervalMs": 30000,
     "pollIntervalMs": 10000,
     "logLevel": "info"
+  },
+  "dashboard": {
+    "enabled": false,
+    "port": 4180,
+    "bindAddress": "127.0.0.1"
   },
   "storage": {
     "identityPath": "var/identity.json",
@@ -29,7 +35,8 @@
     "upload": {
       "intervalMs": 15000,
       "uploadConcurrency": 3,
-      "maxPayloadWarningBytes": 10485760
+      "maxPayloadWarningBytes": 10485760,
+      "authFailureThreshold": 5
     },
     "noop": {
       "timeoutMs": 5000,

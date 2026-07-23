@@ -11,7 +11,18 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "package:binary": "node scripts/packaging/build-binary.mjs",
+    "package:verify": "node scripts/packaging/verify-binary.mjs"
+  },
+  "pkg": {
+    "scripts": [
+      "node_modules/keytar/lib/keytar.js"
+    ],
+    "assets": [
+      "node_modules/keytar/build/Release/keytar.node",
+      "node_modules/keytar/package.json"
+    ]
   },
   "dependencies": {
     "ajv": "^8.20.0",
@@ -24,9 +35,14 @@
     "p-limit": "^7.3.1",
     "pino": "^10.3.1",
     "plist": "^5.0.0",
-    "systeminformation": "^5.33.0"
+    "systeminformation": "^5.33.0",
+    "ws": "^8.21.1"
   },
   "optionalDependencies": {
     "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.21.0",
+    "esbuild": "^0.28.1"
   }
 }

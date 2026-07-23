@@ -4,10 +4,14 @@ import path from 'node:path';
 const serviceName = 'asvp-internal-network-agent';
 const accountName = 'agent-identity';
 
+let keytarLoadError = null;
+
 async function loadKeytar() {
   try {
+    keytarLoadError = null;
     return (await import('keytar')).default;
-  } catch {
+  } catch (error) {
+    keytarLoadError = error;
     return null;
   }
 }
@@ -30,6 +34,34 @@ export class CredentialStore {
     if (this.keychain === undefined) this.keychain = await loadKeytar();
     if (!this.keychain) this.logger?.warn('OS keychain unavailable; using restricted identity file fallback');
     return this;
+  }
+
+  getBackend() {
+    return this.keychain ? 'keychain' : 'restricted-file';
+  }
+
+  async diagnoseBackend() {
+    if (!this.keychain) return {
+      backend: 'restricted-file',
+      nativeAddonLoaded: false,
+      operational: false,
+      ...(keytarLoadError ? { error: keytarLoadError.message } : {}),
+    };
+    const diagnosticAccount = `${accountName}-diagnostic-${process.pid}`;
+    const marker = `asvp-keychain-diagnostic-${Date.now()}`;
+    try {
+      await this.keychain.setPassword(serviceName, diagnosticAccount, marker);
+      const stored = await this.keychain.getPassword(serviceName, diagnosticAccount);
+      await this.keychain.deletePassword(serviceName, diagnosticAccount);
+      return { backend: 'keychain', nativeAddonLoaded: true, operational: stored === marker };
+    } catch (error) {
+      return {
+        backend: 'keychain',
+        nativeAddonLoaded: true,
+        operational: false,
+        error: error.message,
+      };
+    }
   }
 
   async loadIdentity() {
