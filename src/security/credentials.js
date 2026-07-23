@@ -68,7 +68,7 @@ export class CredentialStore {
     if (this.keychain) {
       try {
         const serialized = await this.keychain.getPassword(serviceName, accountName);
-        return serialized ? JSON.parse(serialized) : null;
+        if (serialized) return JSON.parse(serialized);
       } catch (error) {
         this.logger?.warn({ err: error }, 'OS keychain read failed; using restricted identity file fallback');
         this.keychain = null;

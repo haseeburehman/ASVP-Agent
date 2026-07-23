@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { CredentialStore } from '../../src/security/credentials.js';
 import { loadOrRegisterIdentity } from '../../src/transport/api-client.js';
@@ -41,6 +44,26 @@ test('registers once, persists identity, and reuses it on subsequent runs', asyn
   assert.equal(second.registered, false);
   assert.deepEqual(second.identity, first.identity);
   assert.equal(apiClient.calls, 1);
+});
+
+test('loads restricted-file identity when an available keychain returns no value', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-credential-fallback-'));
+  const identityPath = path.join(directory, 'identity.json');
+  const identity = {
+    agentId: 'fallback-agent',
+    authToken: 'fallback-token',
+    encryptionKey: Buffer.alloc(32, 7).toString('base64'),
+  };
+  try {
+    await writeFile(identityPath, JSON.stringify(identity));
+    const store = await new CredentialStore({
+      identityPath,
+      keychain: { async getPassword() { return null; } },
+    }).initialize();
+    assert.deepEqual(await store.loadIdentity(), identity);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('forced registration replaces the persisted identity', async () => {

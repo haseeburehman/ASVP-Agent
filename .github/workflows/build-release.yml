@@ -93,6 +93,7 @@ jobs:
       - name: Verify packaged restricted-file credential fallback
         env:
           REQUIRE_PACKAGED_FALLBACK: 'true'
+          PACKAGING_DEBUG_PATHS: 'true'
         run: npm run package:verify
       - name: Build deb and rpm
         run: |

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { access, mkdtemp, copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
@@ -62,12 +63,37 @@ try {
     fallbackConfig.storage.statusPath = statusPath;
     fallbackConfig.storage.queueDir = queueDirectory;
     await writeFile(fallbackConfigPath, `${JSON.stringify(fallbackConfig, null, 2)}\n`);
-    const registerResult = await run(['--config', fallbackConfigPath, 'register']);
+    const registerArgs = ['--config', fallbackConfigPath, 'register'];
+    const statusArgs = ['--config', fallbackConfigPath, 'status'];
+    if (process.env.PACKAGING_DEBUG_PATHS === 'true') {
+      const binaryStats = await stat(binary);
+      process.stdout.write(`${JSON.stringify({
+        packagingDebug: true,
+        githubSha: process.env.GITHUB_SHA ?? null,
+        binary: { path: binary, size: binaryStats.size, mtime: binaryStats.mtime.toISOString() },
+        parentProcess: {
+          cwd: process.cwd(),
+          HOME: process.env.HOME ?? null,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? null,
+          TMPDIR: process.env.TMPDIR ?? null,
+          ASVP_IDENTITY_PATH: process.env.ASVP_IDENTITY_PATH ?? null,
+          ASVP_STATUS_PATH: process.env.ASVP_STATUS_PATH ?? null,
+          ASVP_QUEUE_DIR: process.env.ASVP_QUEUE_DIR ?? null,
+        },
+        config: { path: fallbackConfigPath, identityPath, statusPath, queueDirectory },
+        registerSpawn: { cwd: clean, args: registerArgs },
+        statusSpawn: { cwd: clean, args: statusArgs },
+      }, null, 2)}\n`);
+    }
+    const registerResult = await run(registerArgs);
+    if (process.env.PACKAGING_DEBUG_PATHS === 'true') {
+      process.stdout.write(`Packaging debug after register: identityExists=${existsSync(identityPath)} identityPath=${identityPath}\n`);
+    }
     const registeredAgentId = registerResult.stdout.match(/"agentId"\s*:\s*"([^"]+)"/)?.[1];
     if (!registeredAgentId) {
       throw new Error(`Packaged fallback registration did not report its agentId: ${registerResult.stdout}`);
     }
-    const statusResult = await run(['--config', fallbackConfigPath, 'status']);
+    const statusResult = await run(statusArgs);
     const statusAgentId = statusResult.stdout.match(/"agentId"\s*:\s*"([^"]+)"/)?.[1];
     if (statusAgentId !== registeredAgentId) {
       throw new Error(`Packaged fallback identity continuity failed: registered ${registeredAgentId}, status returned ${statusAgentId ?? 'null'}`);
