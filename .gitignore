@@ -8,6 +8,7 @@ node_modules/
 config/local.json
 config/production.json
 *.pem
+!test/fixtures/tls/*.pem
 *.key
 *.p12
 *.pfx

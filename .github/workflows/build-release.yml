@@ -26,7 +26,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install agent dependencies
+        run: npm ci
+      - name: Install central management server dependencies
+        run: npm ci --prefix central-management-server
       - name: Install target keytar native binding
         if: matrix.arch == 'arm64'
         shell: cmd
@@ -72,7 +75,10 @@ jobs:
       - name: Install keychain and packaging prerequisites
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev gnome-keyring dbus-x11 ruby-dev rpm
       - run: sudo gem install fpm --no-document
-      - run: npm ci
+      - name: Install agent dependencies
+        run: npm ci
+      - name: Install central management server dependencies
+        run: npm ci --prefix central-management-server
       - run: npm test
       - run: npm run package:binary
       - name: Verify packaged binary and Secret Service keychain
@@ -124,7 +130,10 @@ jobs:
       - name: Assert native runner architecture
         shell: bash
         run: test "$(node -p process.arch)" = '${{ matrix.arch }}'
-      - run: npm ci
+      - name: Install agent dependencies
+        run: npm ci
+      - name: Install central management server dependencies
+        run: npm ci --prefix central-management-server
       - run: npm test
       - run: npm run package:binary
       - name: Verify packaged binary and macOS Keychain
