@@ -1,6 +1,6 @@
 {
   "name": "asvp-internal-network-agent",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Cross-platform internal network scanning and posture collection agent",
   "type": "module",
