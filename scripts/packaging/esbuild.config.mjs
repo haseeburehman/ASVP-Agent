@@ -67,6 +67,14 @@ function packagingTransforms({ root, version }) {
       }));
       buildApi.onResolve({ filter: /^keytar$/ }, () => ({ path: 'keytar', external: true }));
       buildApi.onResolve({ filter: /^better-sqlite3$/ }, () => ({ path: 'better-sqlite3', external: true }));
+      buildApi.onResolve({ filter: /^(ssh2|cpu-features)$/ }, ({ path: moduleName }) => ({
+        path: moduleName,
+        namespace: 'unused-docker-ssh',
+      }));
+      buildApi.onLoad({ filter: /.*/, namespace: 'unused-docker-ssh' }, ({ path: moduleName }) => ({
+        loader: 'js',
+        contents: `module.exports = new Proxy({}, { get() { throw new Error(${JSON.stringify('Docker-over-SSH is not included in ASVP Agent packages; local Docker sockets remain supported')} + ' (requested module: ${moduleName})'); } });`,
+      }));
     },
   };
 }

@@ -11,12 +11,19 @@ permissions:
 
 jobs:
   windows:
-    name: Windows ${{ matrix.arch }}
+    name: Windows ${{ matrix.label }}
     runs-on: windows-latest
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64]
+        include:
+          - arch: x64
+            label: x64
+            experimental: false
+          - arch: arm64
+            label: ARM64 (experimental)
+            experimental: true
     env:
       PACKAGE_PLATFORM: win
       PACKAGE_ARCH: ${{ matrix.arch }}
@@ -51,7 +58,9 @@ jobs:
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $binary = (Resolve-Path "dist/win-${{ matrix.arch }}/asvp-agent-$version-win-${{ matrix.arch }}.exe").Path
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" "/DMyVersion=$version" "/DMyArch=${{ matrix.arch }}" "/DMyBinary=$binary" scripts/packaging/windows/asvp-agent.iss
+          $iscc = Join-Path -Path ${env:ProgramFiles(x86)} -ChildPath 'Inno Setup 6\ISCC.exe'
+          $iscc = (Resolve-Path $iscc).Path
+          & $iscc "/DMyVersion=$version" "/DMyArch=${{ matrix.arch }}" "/DMyBinary=$binary" scripts/packaging/windows/asvp-agent.iss
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}

@@ -204,7 +204,9 @@ Download the installer matching the machine architecture:
 - `asvp-agent-<version>-windows-x64-setup.exe`
 - `asvp-agent-<version>-windows-arm64-setup.exe`
 
-Run the installer as Administrator. It installs under `C:\Program Files\ASVP Agent` and offers to run the existing `asvp-agent service install` command on the final page. The x64 and ARM64 packages are separate because Windows PE executables are architecture-specific. The ARM64 agent is native ARM64; its pinned WinSW 2.12.0 service wrapper is x64 because WinSW does not publish an ARM64 asset, and therefore uses Windows-on-ARM x64 emulation.
+Run the installer as Administrator. It installs under `C:\Program Files\ASVP Agent` and offers to run the existing `asvp-agent service install` command on the final page. The x64 and ARM64 packages are separate because Windows PE executables are architecture-specific.
+
+> **Windows ARM64 is experimental/best-effort.** GitHub's `windows-latest` runner is x64, and `@yao-pkg/pkg` can fail with `spawn UNKNOWN` while fetching or preparing its Windows ARM64 base binary. Upstream's open Node 22 tooling tracker documents unresolved cross-architecture packaging limitations. The ARM64 matrix entry is allowed to fail without blocking Windows x64, Linux x64, or either native macOS build. When an ARM64 artifact is produced, the agent executable is native ARM64; its pinned WinSW 2.12.0 service wrapper is x64 because WinSW does not publish an ARM64 asset, and therefore uses Windows-on-ARM x64 emulation. Do not treat ARM64 as production-qualified until its packaged keychain and service cycle pass on real Windows ARM64 hardware.
 
 **Unsigned-build warning:** these installers and executables are not Authenticode-signed because no purchased code-signing certificate is configured. Microsoft Defender SmartScreen may show **Windows protected your PC**. Verify the artifact came from the expected GitHub Release, select **More info**, confirm the displayed filename, then choose **Run anyway** only if you trust it. Do not disable SmartScreen.
 
@@ -277,7 +279,7 @@ Installation/removal requires root or Administrator. Source installations execut
 
 ## Release-build verification boundaries
 
-GitHub Actions performs builds on the corresponding OS families rather than building every installer from one host. Linux x64, Windows x64, and both macOS architectures execute the packaged binary, an `os-info` collector smoke test, and the keychain round-trip diagnostic before installer publication. Windows ARM64 is generated on the explicitly requested `windows-latest` matrix runner, which is x64; that runner cannot execute the ARM64 binary. A real Windows ARM64 machine must therefore verify the ARM64 executable, native `keytar` binding, WinSW-under-emulation service cycle, reboot persistence, and uninstall before that target is considered production-qualified.
+GitHub Actions performs release-qualified builds on native Windows x64, Linux x64, macOS x64, and macOS ARM64 runners. Those four targets execute the packaged binary, an `os-info` collector smoke test, and the keychain round-trip diagnostic before installer publication. Windows ARM64 remains a non-blocking experimental cross-architecture build on the x64 `windows-latest` runner; a real Windows ARM64 machine must verify the executable, native `keytar` binding, WinSW-under-emulation service cycle, reboot persistence, and uninstall before that target is considered production-qualified.
 
 ## Open manual verification item
 
