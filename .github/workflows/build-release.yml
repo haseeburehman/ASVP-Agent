@@ -90,8 +90,10 @@ jobs:
         run: npm ci --prefix central-management-server
       - run: npm test
       - run: npm run package:binary
-      - name: Verify packaged binary and Secret Service keychain
-        run: dbus-run-session -- sh -c 'eval "$(gnome-keyring-daemon --start --components=secrets)"; REQUIRE_PACKAGED_KEYCHAIN=true npm run package:verify'
+      - name: Verify packaged restricted-file credential fallback
+        env:
+          REQUIRE_PACKAGED_FALLBACK: 'true'
+        run: npm run package:verify
       - name: Build deb and rpm
         run: |
           version=$(node -p "require('./package.json').version")

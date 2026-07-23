@@ -255,7 +255,9 @@ Every executable exposes an explicit deployment diagnostic:
 asvp-agent diagnostics credentials --require-keychain
 ```
 
-It loads the native `keytar` binding and performs a temporary write/read/delete round trip. It exits nonzero if the process fell back to restricted-file storage or if the OS keychain is not operational. This is deliberately used in release CI so a missing native binding cannot pass silently.
+On Windows x64 and macOS, release CI loads the native `keytar` binding and performs a temporary OS-keychain write/read/delete round trip; `--require-keychain` exits nonzero if the process falls back or the keychain is not operational.
+
+Linux GitHub runners are headless and have no PAM/desktop login session to create and unlock the Secret Service `login` collection or its default alias. Starting only a synthetic D-Bus session and `gnome-keyring-daemon` loads libsecret but does not reproduce a real user's keyring, causing `Object does not exist at path /org/freedesktop/secrets/collection/login`. Linux CI therefore does not claim OS-keychain verification. Instead it verifies the packaged restricted-file path end to end: mock registration persists an identity, `status` reloads it in a separate process, and the verifier requires mode `0600`. Linux Secret Service behavior remains a manual acceptance check on a real installation with a genuine logged-in user/keyring session.
 
 ## Native service installation
 
@@ -279,7 +281,7 @@ Installation/removal requires root or Administrator. Source installations execut
 
 ## Release-build verification boundaries
 
-GitHub Actions performs release-qualified builds on native Windows x64, Linux x64, macOS x64, and macOS ARM64 runners. Those four targets execute the packaged binary, an `os-info` collector smoke test, and the keychain round-trip diagnostic before installer publication. Windows ARM64 remains a non-blocking experimental cross-architecture build on the x64 `windows-latest` runner; a real Windows ARM64 machine must verify the executable, native `keytar` binding, WinSW-under-emulation service cycle, reboot persistence, and uninstall before that target is considered production-qualified.
+GitHub Actions performs release-qualified builds on native Windows x64, Linux x64, macOS x64, and macOS ARM64 runners. All four execute the packaged binary and an `os-info` collector smoke test. Windows and macOS additionally require an OS-keychain round trip; Linux requires the packaged restricted-file identity round trip because its headless runner has no genuine login keyring. Windows ARM64 remains a non-blocking experimental cross-architecture build on the x64 `windows-latest` runner; a real Windows ARM64 machine must verify the executable, native `keytar` binding, WinSW-under-emulation service cycle, reboot persistence, and uninstall before that target is considered production-qualified.
 
 ## Open manual verification item
 

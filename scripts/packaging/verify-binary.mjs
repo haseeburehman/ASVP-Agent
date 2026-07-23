@@ -1,4 +1,4 @@
-import { access, mkdtemp, copyFile, mkdir, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,6 +50,30 @@ try {
   const parsed = JSON.parse(match);
   if (process.env.REQUIRE_PACKAGED_KEYCHAIN === 'true' && (parsed.backend !== 'keychain' || !parsed.operational)) {
     throw new Error(`Packaged keychain diagnostic failed: ${JSON.stringify(parsed)}`);
+  }
+  if (process.env.REQUIRE_PACKAGED_FALLBACK === 'true') {
+    const fallbackConfigPath = path.join(clean, 'config', 'fallback-test.json');
+    const fallbackConfig = JSON.parse(await readFile(path.join(clean, 'config', 'default.json'), 'utf8'));
+    fallbackConfig.server.mode = 'mock';
+    fallbackConfig.storage.identityPath = 'var/fallback-identity.json';
+    fallbackConfig.storage.statusPath = 'var/fallback-status.json';
+    fallbackConfig.storage.queueDir = 'var/fallback-queue';
+    await writeFile(fallbackConfigPath, `${JSON.stringify(fallbackConfig, null, 2)}\n`);
+    await run(['--config', fallbackConfigPath, 'register']);
+    const statusResult = await run(['--config', fallbackConfigPath, 'status']);
+    if (!/"agentId"\s*:\s*"[^"]+"/.test(statusResult.stdout)) {
+      throw new Error(`Packaged fallback identity was not reloaded by status: ${statusResult.stdout}`);
+    }
+    const identityPath = path.join(clean, 'var', 'fallback-identity.json');
+    const identity = JSON.parse(await readFile(identityPath, 'utf8'));
+    if (!identity.agentId || !identity.authToken || !identity.encryptionKey) {
+      throw new Error('Packaged restricted-file fallback persisted an incomplete identity');
+    }
+    if (process.platform !== 'win32') {
+      const mode = (await stat(identityPath)).mode & 0o777;
+      if (mode !== 0o600) throw new Error(`Packaged restricted-file fallback mode was ${mode.toString(8)}, expected 600`);
+    }
+    process.stdout.write('Packaged restricted-file credential fallback round trip passed (mode 0600).\n');
   }
 } finally {
   await rm(clean, { recursive: true, force: true });
