@@ -33,6 +33,8 @@ await run(process.execPath, [
   '--config', path.join(root, 'package.json'),
   '--target', `node22-${platform}-${arch}`,
   '--output', outputPath,
+  '--no-bytecode',
+  '--public',
   '--public-packages', 'keytar,node-addon-api',
 ], '@yao-pkg/pkg');
 
