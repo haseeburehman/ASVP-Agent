@@ -13,6 +13,9 @@
 #ifndef MyWinSw
   #error MyWinSw must be defined
 #endif
+#ifndef MyPreconfigured
+  #error MyPreconfigured must be defined
+#endif
 
 #define MyAppName "ASVP Agent"
 #define MyExeName "asvp-agent.exe"
@@ -186,19 +189,12 @@ begin
 end;
 
 procedure InitializeWizard();
-var
-  ConfigContents: AnsiString;
-  LowerConfig: String;
 begin
+#if MyPreconfigured == 1
+  BakedEnrollment := True;
+#else
   BakedEnrollment := False;
-  if LoadStringFromFile(ExpandConstant('{#MyConfig}'), ConfigContents) then
-  begin
-    LowerConfig := Lowercase(String(ConfigContents));
-    BakedEnrollment := (Pos('management.example.invalid', LowerConfig) = 0) and
-      ((Pos('"url": "https://', LowerConfig) > 0) or
-       (Pos('"url": "http://127.0.0.1', LowerConfig) > 0) or
-       (Pos('"url": "http://localhost', LowerConfig) > 0));
-  end;
+#endif
   EnrollmentPage := CreateInputQueryPage(wpSelectDir,
     'Enroll ASVP Agent',
     'Connect this installation to its management server',

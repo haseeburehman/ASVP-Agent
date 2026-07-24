@@ -44,6 +44,9 @@ jobs:
         run: npm rebuild keytar --arch=arm64
       - run: npm test
       - run: npm run package:binary
+      - name: Verify Windows packaged management configuration
+        shell: pwsh
+        run: node scripts/packaging/verify-packaged-config.mjs "dist/win-${{ matrix.arch }}/config/default.json"
       - name: Verify packaged binary and Windows Credential Manager
         if: matrix.arch == 'x64'
         shell: cmd
@@ -64,9 +67,12 @@ jobs:
           $binary = (Resolve-Path "dist/win-${{ matrix.arch }}/asvp-agent-$version-win-${{ matrix.arch }}.exe").Path
           $config = (Resolve-Path "dist/win-${{ matrix.arch }}/config/default.json").Path
           $winsw = (Resolve-Path "dist/win-${{ matrix.arch }}/asvp-agent-service.exe").Path
+          $packagedConfig = Get-Content $config -Raw | ConvertFrom-Json
+          $preconfigured = if ($packagedConfig.server.url -and $packagedConfig.server.url -ne 'https://management.example.invalid') { '1' } else { '0' }
+          Write-Output "Inno enrollment mode: $(if ($preconfigured -eq '1') { 'PRECONFIGURED' } else { 'GENERIC' }); URL=$($packagedConfig.server.url)"
           $iscc = Join-Path -Path ${env:ProgramFiles(x86)} -ChildPath 'Inno Setup 6\ISCC.exe'
           $iscc = (Resolve-Path $iscc).Path
-          & $iscc "/DMyVersion=$version" "/DMyArch=${{ matrix.arch }}" "/DMyBinary=$binary" "/DMyConfig=$config" "/DMyWinSw=$winsw" scripts/packaging/windows/asvp-agent.iss
+          & $iscc "/DMyVersion=$version" "/DMyArch=${{ matrix.arch }}" "/DMyBinary=$binary" "/DMyConfig=$config" "/DMyWinSw=$winsw" "/DMyPreconfigured=$preconfigured" scripts/packaging/windows/asvp-agent.iss
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}

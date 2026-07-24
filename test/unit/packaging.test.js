@@ -6,6 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { discoverCollectorModules, verifyCollectorCoverage } from '../../scripts/packaging/esbuild.config.mjs';
 import { preparePackagedConfig } from '../../scripts/packaging/prepare-config.mjs';
+import { verifyPackagedConfig } from '../../scripts/packaging/verify-packaged-config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -40,9 +41,26 @@ test('Windows uninstall deletes only the confirmed install tree while upgrades p
     assert.match(script, /service install";[^\n]*Flags: runhidden waituntilterminated/);
     assert.doesNotMatch(script, /service install";[^\n]*postinstall/);
     assert.match(script, /service uninstall --remove-data/);
+    assert.match(script, /#ifndef MyPreconfigured/);
+  assert.match(script, /#if MyPreconfigured == 1[\s\S]*BakedEnrollment := True/);
+  assert.doesNotMatch(script, /LoadStringFromFile\(ExpandConstant\('\{#MyConfig\}'\)/);
   assert.match(script, /\[UninstallDelete\][\s\S]*Type: filesandordirs; Name: "\{app\}"/);
   assert.match(script, /Type "yes" to confirm/);
   assert.doesNotMatch(script, /\[UninstallDelete\][\s\S]*Name: "(?:\{autopf\}|[A-Z]:\\|\\\\)/i);
+});
+
+test('packaged config verification compares parsed JSON to the requested URL', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-verified-config-'));
+  const configPath = path.join(directory, 'config.json');
+  try {
+    await writeFile(configPath, JSON.stringify({ server: { url: 'https://asvp.company.test' } }));
+    const result = await verifyPackagedConfig({ configPath, expectedServerUrl: 'https://asvp.company.test/' });
+    assert.equal(result.mode, 'PRECONFIGURED');
+    await assert.rejects(
+      verifyPackagedConfig({ configPath, expectedServerUrl: 'https://different.company.test' }),
+      /packaged config contains/,
+    );
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('generic packaged config preserves enrollment placeholder', async () => {
