@@ -114,12 +114,13 @@ end;
 
 procedure InitializeWizard();
 var
-  ConfigContents, LowerConfig: String;
+  ConfigContents: AnsiString;
+  LowerConfig: String;
 begin
   BakedEnrollment := False;
   if LoadStringFromFile(ExpandConstant('{#MyConfig}'), ConfigContents) then
   begin
-    LowerConfig := Lowercase(ConfigContents);
+    LowerConfig := Lowercase(String(ConfigContents));
     BakedEnrollment := (Pos('management.example.invalid', LowerConfig) = 0) and
       ((Pos('"url": "https://', LowerConfig) > 0) or
        (Pos('"url": "http://127.0.0.1', LowerConfig) > 0) or
