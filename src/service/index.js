@@ -93,6 +93,7 @@ export async function runServiceCommand(action, options = {}) {
     confirm: options.confirm ?? promptConfirmation,
     fetchImpl: options.fetchImpl,
     architecture: options.architecture,
+    removeData: options.removeData ?? false,
     fs: options.fs,
   });
   if (!['install', 'uninstall', 'status'].includes(action)) throw new Error(`Unknown service action ${action}`);

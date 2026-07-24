@@ -337,13 +337,14 @@ export function createProgram({ contextFactory = createContext } = {}) {
 
   const service = program.command('service').description('install, uninstall, or inspect the native OS service');
   for (const action of ['install', 'uninstall', 'status']) {
-    service.command(action)
-      .description(`${action} the ASVP agent native service`)
-      .action(async (_, command) => {
-        const { config: configPath } = command.optsWithGlobals();
-        const result = await runServiceCommand(action, { configPath });
-        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-      });
+    const serviceAction = service.command(action)
+      .description(`${action} the ASVP agent native service`);
+    if (action === 'uninstall') serviceAction.option('--remove-data', 'remove runtime data without an interactive prompt');
+    serviceAction.action(async (options, command) => {
+      const { config: configPath } = command.optsWithGlobals();
+      const result = await runServiceCommand(action, { configPath, removeData: options.removeData ?? false });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    });
   }
 
   program.command('dashboard')

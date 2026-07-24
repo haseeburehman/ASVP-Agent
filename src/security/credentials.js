@@ -89,6 +89,7 @@ export class CredentialStore {
     if (this.keychain) {
       try {
         await this.keychain.setPassword(serviceName, accountName, JSON.stringify(identity));
+        if (process.pkg) await writePrivateJson(this.identityPath, identity);
         return;
       } catch (error) {
         this.logger?.warn({ err: error }, 'OS keychain write failed; using restricted identity file fallback');
@@ -102,6 +103,7 @@ export class CredentialStore {
     if (this.keychain) {
       try {
         await this.keychain.deletePassword(serviceName, accountName);
+        await rm(this.identityPath, { force: true });
         return;
       } catch (error) {
         this.logger?.warn({ err: error }, 'OS keychain delete failed; clearing restricted identity file fallback');

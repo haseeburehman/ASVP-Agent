@@ -10,6 +10,9 @@
 #ifndef MyConfig
   #error MyConfig must be defined
 #endif
+#ifndef MyWinSw
+  #error MyWinSw must be defined
+#endif
 
 #define MyAppName "ASVP Agent"
 #define MyExeName "asvp-agent.exe"
@@ -30,10 +33,13 @@ UninstallDisplayIcon={app}\{#MyExeName}
 ArchitecturesAllowed={#MyArch}
 ArchitecturesInstallIn64BitMode={#MyArch}
 WizardStyle=modern
+DisableWelcomePage=yes
+DisableReadyPage=yes
 
 [Files]
 Source: "{#MyBinary}"; DestDir: "{app}"; DestName: "{#MyExeName}"; Flags: ignoreversion
 Source: "{#MyConfig}"; DestDir: "{app}\\config"; DestName: "default.json"; Flags: ignoreversion onlyifdoesntexist
+Source: "{#MyWinSw}"; DestDir: "{app}\\scripts\\service\\windows"; DestName: "asvp-agent-service.exe"; Flags: ignoreversion
 Source: "..\\..\\..\\src\\dashboard\\public\\index.html"; DestDir: "{app}\\public"; Flags: ignoreversion
 
 [Dirs]
@@ -43,10 +49,10 @@ Name: "{app}\var"; Permissions: users-modify
 Name: "{group}\ASVP Agent Command Prompt"; Filename: "{cmd}"; Parameters: "/K cd /d ""{app}"""
 
 [Run]
-Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service install"; Description: "Install and start the ASVP Agent Windows service"; Flags: postinstall waituntilterminated; Check: ShouldInstallService
+Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service install"; Description: "Install and start the ASVP Agent Windows service"; Flags: runhidden waituntilterminated; Check: ShouldInstallService
 
 [UninstallRun]
-Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service uninstall"; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service uninstall --remove-data"; Flags: runhidden waituntilterminated skipifdoesntexist
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -176,7 +182,6 @@ end;
 
 function InitializeSetup(): Boolean;
 begin
-  MsgBox('This installer and executable are not code-signed. Windows SmartScreen may display an Unknown publisher warning.', mbInformation, MB_OK);
   Result := True;
 end;
 

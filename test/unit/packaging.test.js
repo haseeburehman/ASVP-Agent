@@ -36,6 +36,10 @@ test('packaged config bakes a validated server URL without modifying source', as
 test('Windows uninstall deletes only the confirmed install tree while upgrades preserve config', async () => {
   const script = await readFile(path.join(root, 'scripts', 'packaging', 'windows', 'asvp-agent.iss'), 'utf8');
   assert.match(script, /DestName: "default\.json"; Flags: ignoreversion onlyifdoesntexist/);
+    assert.match(script, /DestName: "asvp-agent-service\.exe"/);
+    assert.match(script, /service install";[^\n]*Flags: runhidden waituntilterminated/);
+    assert.doesNotMatch(script, /service install";[^\n]*postinstall/);
+    assert.match(script, /service uninstall --remove-data/);
   assert.match(script, /\[UninstallDelete\][\s\S]*Type: filesandordirs; Name: "\{app\}"/);
   assert.match(script, /Type "yes" to confirm/);
   assert.doesNotMatch(script, /\[UninstallDelete\][\s\S]*Name: "(?:\{autopf\}|[A-Z]:\\|\\\\)/i);

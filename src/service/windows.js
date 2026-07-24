@@ -4,7 +4,7 @@ import { generateWinSwXml, windowsWinSwAsset } from './definitions.js';
 
 const LOCAL_SERVICE_SID = '*S-1-5-19';
 
-export function createWindowsAdapter({ paths, runner, confirm, fetchImpl = fetch, architecture = process.arch, fs = { access, mkdir, rm, writeFile } }) {
+export function createWindowsAdapter({ paths, runner, confirm, fetchImpl = fetch, architecture = process.arch, removeData = false, fs = { access, mkdir, rm, writeFile } }) {
   const serviceDirectory = path.join(paths.projectRoot, 'scripts', 'service', 'windows');
   const wrapperPath = path.join(serviceDirectory, 'asvp-agent-service.exe');
   const xmlPath = path.join(serviceDirectory, 'asvp-agent-service.xml');
@@ -49,15 +49,15 @@ export function createWindowsAdapter({ paths, runner, confirm, fetchImpl = fetch
     async uninstall() {
       try {
         await fs.access(wrapperPath);
-        await runner(wrapperPath, ['stop'], { allowFailure: true });
-        await runner(wrapperPath, ['uninstall'], { allowFailure: true });
+        await runner(wrapperPath, ['stop'], { allowFailure: true, timeoutMs: 35000 });
+        await runner(wrapperPath, ['uninstall'], { allowFailure: true, timeoutMs: 20000 });
       } catch {
-        await runner('sc.exe', ['stop', 'asvp-agent'], { allowFailure: true });
-        await runner('sc.exe', ['delete', 'asvp-agent'], { allowFailure: true });
+        await runner('sc.exe', ['stop', 'asvp-agent'], { allowFailure: true, timeoutMs: 35000 });
+        await runner('sc.exe', ['delete', 'asvp-agent'], { allowFailure: true, timeoutMs: 20000 });
       }
-      const removeData = await confirm(`Remove agent runtime data at ${paths.varDirectory}? This deletes identity and queued results.`);
-      if (removeData) await fs.rm(paths.varDirectory, { recursive: true, force: true });
-      return { installed: false, dataRemoved: removeData, accountRemoved: false };
+      const shouldRemoveData = removeData || await confirm(`Remove agent runtime data at ${paths.varDirectory}? This deletes identity and queued results.`);
+      if (shouldRemoveData) await fs.rm(paths.varDirectory, { recursive: true, force: true });
+      return { installed: false, dataRemoved: shouldRemoveData, accountRemoved: false };
     },
     async status() {
       try {

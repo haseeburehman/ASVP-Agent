@@ -7,7 +7,7 @@ const SERVICE_USER = '_www';
 const STDOUT_PATH = '/var/log/asvp-agent.log';
 const STDERR_PATH = '/var/log/asvp-agent.error.log';
 
-export function createMacosAdapter({ paths, runner, confirm, fs = { chmod, mkdir, rm, writeFile } }) {
+export function createMacosAdapter({ paths, runner, confirm, removeData = false, fs = { chmod, mkdir, rm, writeFile } }) {
   const definition = generateLaunchdPlist({
     executablePath: paths.executablePath,
     entryArguments: paths.entryArguments,
@@ -46,9 +46,9 @@ export function createMacosAdapter({ paths, runner, confirm, fs = { chmod, mkdir
     async uninstall() {
       await runner('launchctl', ['bootout', `system/${LABEL}`], { allowFailure: true });
       await fs.rm(PLIST_PATH, { force: true });
-      const removeData = await confirm(`Remove agent runtime data at ${paths.varDirectory}? This deletes identity and queued results.`);
-      if (removeData) await fs.rm(paths.varDirectory, { recursive: true, force: true });
-      return { installed: false, dataRemoved: removeData, accountRemoved: false };
+      const shouldRemoveData = removeData || await confirm(`Remove agent runtime data at ${paths.varDirectory}? This deletes identity and queued results.`);
+      if (shouldRemoveData) await fs.rm(paths.varDirectory, { recursive: true, force: true });
+      return { installed: false, dataRemoved: shouldRemoveData, accountRemoved: false };
     },
     async status() {
       const result = await runner('launchctl', ['print', `system/${LABEL}`], { allowFailure: true });

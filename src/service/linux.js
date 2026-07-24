@@ -4,7 +4,7 @@ import { generateSystemdUnit } from './definitions.js';
 const UNIT_PATH = '/etc/systemd/system/asvp-agent.service';
 const SERVICE_USER = 'asvp-agent';
 
-export function createLinuxAdapter({ paths, runner, confirm, fs = { access, chmod, chown, copyFile, mkdir, rm, writeFile } }) {
+export function createLinuxAdapter({ paths, runner, confirm, removeData = false, fs = { access, chmod, chown, copyFile, mkdir, rm, writeFile } }) {
   const unit = generateSystemdUnit({
     executablePath: paths.executablePath,
     entryArguments: paths.entryArguments,
@@ -39,11 +39,11 @@ export function createLinuxAdapter({ paths, runner, confirm, fs = { access, chmo
       await runner('systemctl', ['disable', '--now', 'asvp-agent.service'], { allowFailure: true });
       await fs.rm(UNIT_PATH, { force: true });
       await runner('systemctl', ['daemon-reload']);
-      const removeData = await confirm(`Remove agent runtime data at ${paths.varDirectory}? This deletes identity and queued results.`);
-      if (removeData) await fs.rm(paths.varDirectory, { recursive: true, force: true });
+      const shouldRemoveData = removeData || await confirm(`Remove agent runtime data at ${paths.varDirectory}? This deletes identity and queued results.`);
+      if (shouldRemoveData) await fs.rm(paths.varDirectory, { recursive: true, force: true });
       const removeAccount = await confirm(`Remove the ${SERVICE_USER} system account?`);
       if (removeAccount) await runner('userdel', [SERVICE_USER], { allowFailure: true });
-      return { installed: false, dataRemoved: removeData, accountRemoved: removeAccount };
+      return { installed: false, dataRemoved: shouldRemoveData, accountRemoved: removeAccount };
     },
     async status() {
       const installed = (await runner('test', ['-f', UNIT_PATH], { allowFailure: true })).code === 0;
