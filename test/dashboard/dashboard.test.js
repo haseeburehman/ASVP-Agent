@@ -136,7 +136,8 @@ test('dashboard saves the loopback HTTP server URL without confusing it with the
 test('mock mode disables central task creation with a clear reason', async () => {
   await withDashboard(async (dashboard) => {
     const snapshot = dashboard.snapshot();
-    assert.equal(snapshot.taskCreation.enabled, false);
+    assert.equal(snapshot.agentVersion, 'test');
+        assert.equal(snapshot.taskCreation.enabled, false);
     assert.equal(snapshot.taskCreation.reason, 'Task creation requires a real connected server');
     await assert.rejects(
       dashboard.createTask({ collectorName: 'os-info' }),

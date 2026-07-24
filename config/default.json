@@ -4,6 +4,7 @@
     "url": "https://management.example.invalid",
     "registrationPath": "/api/agents/register",
     "heartbeatPath": "/api/agents/heartbeat",
+        "deregistrationPath": "/api/agents/deregister",
     "tasksPath": "/api/agents/tasks/poll",
     "resultsPath": "/api/agents/results",
     "adminToken": null,

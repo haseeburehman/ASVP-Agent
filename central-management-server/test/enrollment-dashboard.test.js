@@ -72,6 +72,7 @@ test('dashboard requires a session and detail data is isolated per agent', async
   await env.api.post('/api/admin/tasks').set('Authorization', 'Bearer admin-secret').send({ agentId: second.agentId, collectorName: 'noop', params: { owner: 'two' } }).expect(201);
   const detail = await browser.get(`/api/dashboard/agents/${first.agentId}`).expect(200);
   assert.equal(detail.body.agent.id, first.agentId);
+    assert.ok(Object.hasOwn(detail.body.agent, 'agent_version'));
   assert.ok(detail.body.tasks.every((task) => task.params.owner === 'one'));
   assert.ok(detail.body.events.every((event) => !JSON.stringify(event).includes(second.agentId)));
   assert.equal(JSON.stringify(detail.body).includes('auth_token_hash'), false);

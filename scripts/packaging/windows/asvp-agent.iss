@@ -45,6 +45,12 @@ Name: "{group}\ASVP Agent Command Prompt"; Filename: "{cmd}"; Parameters: "/K cd
 [Run]
 Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service install"; Description: "Install and start the ASVP Agent Windows service"; Flags: postinstall waituntilterminated; Check: ShouldInstallService
 
+[UninstallRun]
+Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service uninstall"; Flags: runhidden waituntilterminated skipifdoesntexist
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}"
+
 [Code]
 var
   EnrollmentPage: TInputQueryWizardPage;
@@ -104,6 +110,18 @@ begin
 
   if Pos('https://', LowerValue) = 1 then Result := True
   else Result := IsLoopbackAuthority(Authority);
+end;
+
+function InitializeUninstall(): Boolean;
+var
+  Answer: String;
+begin
+  Answer := '';
+  Result := InputQuery('Remove ASVP Agent',
+    'This removes the service, identity, queued results, logs, configuration, and every file under ' + ExpandConstant('{app}') + '. Type "yes" to confirm:',
+    False, Answer) and (Lowercase(Trim(Answer)) = 'yes');
+  if not Result then
+    MsgBox('Uninstall was cancelled. No ASVP installation data was removed.', mbInformation, MB_OK);
 end;
 
 function InitializeSetup(): Boolean;

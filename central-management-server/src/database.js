@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS agents (
   status TEXT NOT NULL,
   platform TEXT,
   architecture TEXT,
-  last_poll_at TEXT
+  last_poll_at TEXT,
+  agent_version TEXT,
+  deregistered_at TEXT
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -68,5 +70,7 @@ export function createDatabase({ filename = 'var/management.sqlite', cwd = proce
   addColumn(database, 'agents', 'platform TEXT');
   addColumn(database, 'agents', 'architecture TEXT');
   addColumn(database, 'agents', 'last_poll_at TEXT');
+    addColumn(database, 'agents', 'agent_version TEXT');
+    addColumn(database, 'agents', 'deregistered_at TEXT');
   return database;
 }

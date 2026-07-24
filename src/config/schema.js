@@ -9,12 +9,13 @@ export const configSchema = {
     server: {
       type: 'object',
       additionalProperties: true,
-      required: ['mode', 'url', 'registrationPath', 'heartbeatPath', 'tasksPath', 'resultsPath', 'requestTimeoutMs'],
+      required: ['mode', 'url', 'registrationPath', 'heartbeatPath', 'deregistrationPath', 'tasksPath', 'resultsPath', 'requestTimeoutMs'],
       properties: {
         mode: { enum: ['mock', 'http'] },
         url: { type: 'string', minLength: 1 },
         registrationPath: { type: 'string', pattern: '^/' },
         heartbeatPath: { type: 'string', pattern: '^/' },
+                deregistrationPath: { type: 'string', pattern: '^/' },
         tasksPath: { type: 'string', pattern: '^/' },
         resultsPath: { type: 'string', pattern: '^/' },
         adminToken: { type: ['string', 'null'], minLength: 1 },

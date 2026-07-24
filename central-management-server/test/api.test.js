@@ -7,6 +7,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { createDatabase } from '../src/database.js';
 import { hashToken } from '../src/crypto.js';
+import { computeFleetStatus } from '../src/fleet-status.js';
 
 const gzipAsync = promisify(gzip);
 const logger = { info() {}, warn() {}, error() {} };
@@ -24,7 +25,7 @@ function createAdminTask(api, adminToken, body) {
 
 async function register(api) {
   const response = await api.post('/api/agents/register').send({
-    hostname: 'test-host', platform: 'win32', architecture: 'x64',
+    hostname: 'test-host', platform: 'win32', architecture: 'x64', agentVersion: '1.0.0',
   }).expect(201);
   return response.body;
 }
@@ -108,6 +109,21 @@ test('registration falls back to a new agent when previousAgentId is unknown', a
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agents').get().count, 1);
 });
 
+test('deregister marks an authenticated agent as intentionally removed', async (t) => {
+  const { database, api } = setup();
+  t.after(() => database.close());
+  const identity = await register(api);
+  await api.post('/api/agents/deregister').send({ agentId: identity.agentId }).expect(401);
+  const response = await api.post('/api/agents/deregister')
+    .set('Authorization', `Bearer ${identity.authToken}`)
+    .send({ agentId: identity.agentId }).expect(200);
+  assert.equal(response.body.accepted, true);
+  const row = database.prepare('SELECT status, deregistered_at FROM agents WHERE id = ?').get(identity.agentId);
+  assert.equal(row.status, 'deregistered');
+  assert.ok(row.deregistered_at);
+    assert.equal(computeFleetStatus(row).state, 'deregistered');
+});
+
 test('heartbeat requires bearer auth, validates agentId, and updates presence', async (t) => {
   const { database, api } = setup();
   t.after(() => database.close());
@@ -129,6 +145,7 @@ test('heartbeat requires bearer auth, validates agentId, and updates presence', 
   assert.equal(row.hostname, 'heartbeat-host');
   assert.equal(row.status, 'online');
   assert.ok(row.last_heartbeat_at);
+    assert.equal(row.agent_version, '0.1.0');
 });
 
 test('admin task creation rejects missing and wrong tokens without creating tasks', async (t) => {

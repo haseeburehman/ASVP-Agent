@@ -193,6 +193,7 @@ export class DashboardServer {
     const networkAuthorized = (this.config.collectors['network-scan'].allowedCidrs ?? []).length > 0;
     return {
       ...health,
+      agentVersion: this.version,
       connectionMode: this.config.server.mode,
       serverUrl: this.config.server.url,
       serverConnectionState,

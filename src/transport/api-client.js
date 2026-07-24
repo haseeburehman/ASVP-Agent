@@ -86,6 +86,10 @@ export class FetchManagementTransport {
     return this.#post(pathname, payload, authToken);
   }
 
+  deregister(pathname, payload, authToken) {
+    return this.#post(pathname, payload, authToken);
+  }
+
   pollTasks(pathname, payload, authToken) {
     return this.#post(pathname, payload, authToken);
   }
@@ -112,6 +116,15 @@ export class ApiClient {
 
   sendHeartbeat(identity, status) {
     return this.transport.heartbeat(this.config.server.heartbeatPath, status, identity.authToken);
+  }
+
+  deregister(identity) {
+    if (this.config.server.mode === 'mock') return Promise.resolve({ accepted: true, deregisteredAt: new Date().toISOString() });
+    return this.transport.deregister(
+      this.config.server.deregistrationPath,
+      { agentId: identity.agentId },
+      identity.authToken,
+    );
   }
 
   uploadResult(identity, payload, { signal } = {}) {

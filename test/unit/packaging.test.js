@@ -33,6 +33,14 @@ test('packaged config bakes a validated server URL without modifying source', as
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('Windows uninstall deletes only the confirmed install tree while upgrades preserve config', async () => {
+  const script = await readFile(path.join(root, 'scripts', 'packaging', 'windows', 'asvp-agent.iss'), 'utf8');
+  assert.match(script, /DestName: "default\.json"; Flags: ignoreversion onlyifdoesntexist/);
+  assert.match(script, /\[UninstallDelete\][\s\S]*Type: filesandordirs; Name: "\{app\}"/);
+  assert.match(script, /Type "yes" to confirm/);
+  assert.doesNotMatch(script, /\[UninstallDelete\][\s\S]*Name: "(?:\{autopf\}|[A-Z]:\\|\\\\)/i);
+});
+
 test('generic packaged config preserves enrollment placeholder', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-generic-config-'));
   const sourcePath = path.join(directory, 'source.json');

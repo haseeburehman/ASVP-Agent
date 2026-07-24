@@ -39,6 +39,7 @@ export class AgentLifecycle {
         hostname: os.hostname(),
         platform: process.platform,
         architecture: process.arch,
+        agentVersion: this.version,
         enrollmentToken: this.config.server.enrollmentToken,
       },
     });

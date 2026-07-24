@@ -220,7 +220,7 @@ export function createProgram({ contextFactory = createContext } = {}) {
     .description('force registration and replace the local identity')
     .action(async (_, command) => {
       const { config: configPath } = command.optsWithGlobals();
-      const { config, logger } = await contextFactory({ config: configPath });
+      const { config, logger, version } = await contextFactory({ config: configPath });
       try {
         const credentialStore = await new CredentialStore({
           identityPath: config.storage.identityPath,
@@ -231,7 +231,7 @@ export function createProgram({ contextFactory = createContext } = {}) {
           credentialStore,
           apiClient,
           force: true,
-          metadata: { enrollmentToken: config.server.enrollmentToken },
+          metadata: { enrollmentToken: config.server.enrollmentToken, agentVersion: version },
         });
         logger.info({ agentId: identity.agentId }, 'Agent registration replaced');
       } finally {

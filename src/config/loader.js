@@ -14,6 +14,7 @@ const envMappings = {
     ASVP_ENROLLMENT_TOKEN: ['server', 'enrollmentToken', String],
   ASVP_REGISTRATION_PATH: ['server', 'registrationPath', String],
   ASVP_HEARTBEAT_PATH: ['server', 'heartbeatPath', String],
+    ASVP_DEREGISTRATION_PATH: ['server', 'deregistrationPath', String],
   ASVP_TASKS_PATH: ['server', 'tasksPath', String],
   ASVP_RESULTS_PATH: ['server', 'resultsPath', String],
   ADMIN_TOKEN: ['server', 'adminToken', String],

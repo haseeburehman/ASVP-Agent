@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { generateLaunchdPlist, generateSystemdUnit, generateWinSwXml, windowsWinSwAsset } from '../../src/service/definitions.js';
 import { isElevated, requireElevation } from '../../src/service/elevation.js';
-import { detectServicePlatform, runServiceCommand } from '../../src/service/index.js';
+import { deregisterBeforeUninstall, detectServicePlatform, runServiceCommand } from '../../src/service/index.js';
 
 const posixPaths = {
   nodePath: '/usr/bin/node',
@@ -11,6 +11,26 @@ const posixPaths = {
   workingDirectory: '/opt/asvp-agent',
   varDirectory: '/opt/asvp-agent/var',
 };
+
+test('uninstall deregistration is authenticated and best-effort', async () => {
+  const identity = { agentId: 'agent-1', authToken: 'secret', encryptionKey: 'key' };
+  const accepted = await deregisterBeforeUninstall({
+    config: { server: { mode: 'http' }, storage: { identityPath: 'var/identity.json' } },
+    paths: { projectRoot: 'C:\\Program Files\\ASVP Agent' },
+    credentialStore: { loadIdentity: async () => identity },
+    apiClient: { deregister: async (received) => ({ accepted: received === identity }) },
+  });
+  assert.deepEqual(accepted, { attempted: true, accepted: true, agentId: 'agent-1' });
+  const unreachable = await deregisterBeforeUninstall({
+    config: { server: { mode: 'http' }, storage: { identityPath: 'var/identity.json' } },
+    paths: { projectRoot: 'C:\\Program Files\\ASVP Agent' },
+    credentialStore: { loadIdentity: async () => identity },
+    apiClient: { deregister: async () => { throw new Error('network down'); } },
+  });
+  assert.equal(unreachable.attempted, true);
+  assert.equal(unreachable.accepted, false);
+  assert.match(unreachable.reason, /network down/);
+});
 
 test('systemd unit uses the foreground entry point, absolute config, hardening, and no capabilities', () => {
   const unit = generateSystemdUnit(posixPaths);

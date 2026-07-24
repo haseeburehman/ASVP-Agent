@@ -5,6 +5,8 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { defaultConfigPath, loadConfig } from '../config/loader.js';
 import { requireElevation } from './elevation.js';
+import { CredentialStore } from '../security/credentials.js';
+import { ApiClient } from '../transport/api-client.js';
 import { resolveServicePaths } from './definitions.js';
 import { createLinuxAdapter } from './linux.js';
 import { createMacosAdapter } from './macos.js';
@@ -57,13 +59,29 @@ export function createPlatformAdapter(platform, options) {
   return detectServicePlatform(platform);
 }
 
+export async function deregisterBeforeUninstall({ config, paths, credentialStore, apiClient } = {}) {
+  try {
+    const store = credentialStore ?? await new CredentialStore({
+      identityPath: config.storage.identityPath,
+      cwd: paths.projectRoot,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+    }).initialize();
+    const identity = await store.loadIdentity();
+    if (!identity?.agentId || !identity?.authToken) return { attempted: false, accepted: false, reason: 'No persisted agent identity was available' };
+    const response = await (apiClient ?? new ApiClient({ config })).deregister(identity);
+    return { attempted: true, accepted: response?.accepted === true, agentId: identity.agentId };
+  } catch (error) {
+    return { attempted: true, accepted: false, reason: error.message };
+  }
+}
+
 export async function runServiceCommand(action, options = {}) {
   const platform = detectServicePlatform(options.platform);
   const runner = options.runner ?? runCommand;
   if (action === 'install' || action === 'uninstall') {
     await requireElevation({ platform, runCommand: runner, geteuid: options.geteuid });
   }
-  const { paths } = await resolveServiceContext({
+  const { config, paths } = await resolveServiceContext({
     configPath: options.configPath,
     cwd: options.cwd,
     nodePath: options.nodePath,
@@ -78,7 +96,11 @@ export async function runServiceCommand(action, options = {}) {
     fs: options.fs,
   });
   if (!['install', 'uninstall', 'status'].includes(action)) throw new Error(`Unknown service action ${action}`);
-  return adapter[action]();
+  const deregistration = action === 'uninstall'
+    ? await deregisterBeforeUninstall({ config, paths, credentialStore: options.credentialStore, apiClient: options.apiClient })
+    : null;
+  const result = await adapter[action]();
+  return deregistration ? { ...result, deregistration } : result;
 }
 
 export { projectRoot as serviceProjectRoot };

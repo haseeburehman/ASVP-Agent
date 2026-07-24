@@ -76,10 +76,11 @@ export function createApp({
   app.use(express.json({ limit: '25mb' }));
   app.use('/api/admin', limiter, createAdminAuthenticator(adminToken));
 
-  const insertAgent = database.prepare(`INSERT INTO agents (id, hostname, auth_token_hash, encryption_key, registered_at, last_heartbeat_at, status, platform, architecture, last_poll_at) VALUES (?, ?, ?, ?, ?, NULL, 'registered', ?, ?, NULL)`);
+  const insertAgent = database.prepare(`INSERT INTO agents (id, hostname, auth_token_hash, encryption_key, registered_at, last_heartbeat_at, status, platform, architecture, last_poll_at, agent_version, deregistered_at) VALUES (?, ?, ?, ?, ?, NULL, 'registered', ?, ?, NULL, ?, NULL)`);
   const findRegistrationAgent = database.prepare('SELECT id, auth_token_hash FROM agents WHERE id = ?');
-  const rotateAgentCredentials = database.prepare(`UPDATE agents SET hostname = COALESCE(?, hostname), platform = COALESCE(?, platform), architecture = COALESCE(?, architecture), auth_token_hash = ?, encryption_key = ?, last_heartbeat_at = NULL, last_poll_at = NULL, status = 'registered' WHERE id = ?`);
-  const updateHeartbeat = database.prepare(`UPDATE agents SET hostname = ?, last_heartbeat_at = ?, status = 'online' WHERE id = ?`);
+  const rotateAgentCredentials = database.prepare(`UPDATE agents SET hostname = COALESCE(?, hostname), platform = COALESCE(?, platform), architecture = COALESCE(?, architecture), agent_version = COALESCE(?, agent_version), auth_token_hash = ?, encryption_key = ?, last_heartbeat_at = NULL, last_poll_at = NULL, deregistered_at = NULL, status = 'registered' WHERE id = ?`);
+  const updateHeartbeat = database.prepare(`UPDATE agents SET hostname = ?, last_heartbeat_at = ?, agent_version = COALESCE(?, agent_version), deregistered_at = NULL, status = 'online' WHERE id = ?`);
+  const deregisterAgent = database.prepare(`UPDATE agents SET status = 'deregistered', deregistered_at = ? WHERE id = ?`);
   const updatePoll = database.prepare('UPDATE agents SET last_poll_at = ? WHERE id = ?');
   const insertEvent = database.prepare('INSERT INTO agent_events (agent_id, event_type, details, created_at) VALUES (?, ?, ?, ?)');
   const event = (agentId, type, details, timestamp = now().toISOString()) => insertEvent.run(agentId, type, JSON.stringify(details), timestamp);
@@ -119,7 +120,7 @@ export function createApp({
       .find((row) => storedTokenMatches(row.token_hash, suppliedToken))?.token_hash ?? null;
   }
 
-  const registerNew = database.transaction(({ hostname, platform, architecture, enrollmentToken }) => {
+  const registerNew = database.transaction(({ hostname, platform, architecture, agentVersion, enrollmentToken }) => {
     const timestamp = now().toISOString();
     if (requireEnrollmentToken) {
       const tokenHash = findEnrollmentTokenHash(enrollmentToken, timestamp);
@@ -127,7 +128,7 @@ export function createApp({
     }
     const agentId = randomUUID();
     const secrets = generateAgentSecrets();
-    insertAgent.run(agentId, hostname, hashToken(secrets.authToken), secrets.encryptionKey, timestamp, platform, architecture);
+    insertAgent.run(agentId, hostname, hashToken(secrets.authToken), secrets.encryptionKey, timestamp, platform, architecture, agentVersion);
     event(agentId, 'register', { continuity: 'new-agent', hostname, platform, architecture }, timestamp);
     const baselineTasks = enqueueBaseline(agentId, timestamp, true);
     return { agentId, ...secrets, baselineTasks };
@@ -139,6 +140,7 @@ export function createApp({
       const hostname = body.hostname == null ? null : requireString(body.hostname, 'hostname');
       const platform = body.platform == null ? null : requireString(body.platform, 'platform');
       const architecture = body.architecture == null ? null : requireString(body.architecture, 'architecture');
+      const agentVersion = body.agentVersion == null ? null : requireString(body.agentVersion, 'agentVersion');
       const previousAgentId = body.previousAgentId == null ? null : requireString(body.previousAgentId, 'previousAgentId');
       const knownPreviousAgent = previousAgentId ? findRegistrationAgent.get(previousAgentId) : null;
       const previousBearer = /^Bearer\s+(.+)$/i.exec(request.headers.authorization ?? '')?.[1];
@@ -146,11 +148,11 @@ export function createApp({
       let identity;
       if (continuityAuthorized) {
         const secrets = generateAgentSecrets();
-        rotateAgentCredentials.run(hostname, platform, architecture, hashToken(secrets.authToken), secrets.encryptionKey, previousAgentId);
+        rotateAgentCredentials.run(hostname, platform, architecture, agentVersion, hashToken(secrets.authToken), secrets.encryptionKey, previousAgentId);
         event(previousAgentId, 'register', { continuity: 'reused-existing-agent', hostname, platform, architecture });
         identity = { agentId: previousAgentId, ...secrets };
       } else {
-        identity = registerNew({ hostname, platform, architecture, enrollmentToken: body.enrollmentToken });
+        identity = registerNew({ hostname, platform, architecture, agentVersion, enrollmentToken: body.enrollmentToken });
       }
       const baselineTasks = identity.baselineTasks ?? [];
       delete identity.baselineTasks;
@@ -158,6 +160,20 @@ export function createApp({
       knownFleetStates.set(identity.agentId, 'never-connected');
       fleetHub.broadcast({ type: 'agent-registered', agentId: identity.agentId, hostname, platform, architecture, continuity: continuityAuthorized, baselineTaskCount: baselineTasks.length });
       response.status(201).json(identity);
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/agents/deregister', authenticate, (request, response, next) => {
+    try {
+      const body = requireObject(request.body, 'request body');
+      const agentId = requireString(body.agentId, 'agentId');
+      if (agentId !== request.agent.id) throw httpError(403, 'Deregister agentId does not match bearer token');
+      const timestamp = now().toISOString();
+      deregisterAgent.run(timestamp, agentId);
+      event(agentId, 'deregister', { reason: 'service-uninstall' }, timestamp);
+      knownFleetStates.set(agentId, 'deregistered');
+      fleetHub.broadcast({ type: 'status-transition', agentId, from: computeFleetStatus(request.agent, { now: now(), expectedHeartbeatIntervalMs }).state, to: 'deregistered', occurredAt: timestamp });
+      response.json({ accepted: true, deregisteredAt: timestamp });
     } catch (error) { next(error); }
   });
 
@@ -169,7 +185,7 @@ export function createApp({
       const hostname = requireString(body.hostname, 'hostname');
       const timestamp = now().toISOString();
       const previousStatus = computeFleetStatus(request.agent, { now: now(), expectedHeartbeatIntervalMs }).state;
-      updateHeartbeat.run(hostname, timestamp, agentId);
+      updateHeartbeat.run(hostname, timestamp, body.agentVersion ?? null, agentId);
       event(agentId, 'heartbeat', { hostname, uptimeSeconds: body.uptimeSeconds ?? null, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null }, timestamp);
       fleetHub.broadcast({ type: 'heartbeat', agentId, hostname, receivedAt: timestamp, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null });
       if (previousStatus !== 'online') fleetHub.broadcast({ type: 'status-transition', agentId, from: previousStatus, to: 'online', occurredAt: timestamp });
@@ -282,14 +298,14 @@ export function createApp({
   });
   app.get('/api/dashboard/fleet', dashboardAuth, (_request, response) => {
     const timestamp = now();
-    const agents = database.prepare('SELECT id, hostname, platform, architecture, registered_at, last_heartbeat_at, last_poll_at FROM agents ORDER BY registered_at DESC').all().map((agent) => ({
+    const agents = database.prepare('SELECT id, hostname, platform, architecture, agent_version, registered_at, last_heartbeat_at, last_poll_at, status, deregistered_at FROM agents ORDER BY registered_at DESC').all().map((agent) => ({
       ...agent, status: computeFleetStatus(agent, { now: timestamp, expectedHeartbeatIntervalMs }).state,
     }));
     response.json({ generatedAt: timestamp.toISOString(), expectedHeartbeatIntervalMs, onlineThresholdMs: expectedHeartbeatIntervalMs * 2, agents });
   });
   app.get('/api/dashboard/agents/:agentId', dashboardAuth, (request, response, next) => {
     try {
-      const agent = database.prepare('SELECT id, hostname, platform, architecture, registered_at, last_heartbeat_at, last_poll_at FROM agents WHERE id = ?').get(request.params.agentId);
+      const agent = database.prepare('SELECT id, hostname, platform, architecture, agent_version, registered_at, last_heartbeat_at, last_poll_at, status, deregistered_at FROM agents WHERE id = ?').get(request.params.agentId);
       if (!agent) throw httpError(404, 'Agent not found');
       const tasks = database.prepare('SELECT id, collector_name, params, status, created_at, dispatched_at FROM tasks WHERE agent_id = ? ORDER BY created_at DESC').all(agent.id).map((row) => ({ ...row, params: parseJson(row.params, {}) }));
       const results = database.prepare('SELECT id, task_id, collector, status, raw_data, received_at FROM results WHERE agent_id = ? ORDER BY received_at DESC').all(agent.id).map((row) => ({ ...row, data: parseJson(row.raw_data, null), raw_data: undefined }));
@@ -309,7 +325,7 @@ export function createApp({
   app.locals.dashboardSessions = dashboardSessions;
   app.locals.sweepFleetStatuses = () => {
     const timestamp = now();
-    for (const agent of database.prepare('SELECT id, last_heartbeat_at FROM agents').all()) {
+    for (const agent of database.prepare('SELECT id, last_heartbeat_at, status, deregistered_at FROM agents').all()) {
       const state = computeFleetStatus(agent, { now: timestamp, expectedHeartbeatIntervalMs }).state;
       const previous = knownFleetStates.get(agent.id);
       if (previous && previous !== state) fleetHub.broadcast({ type: 'status-transition', agentId: agent.id, from: previous, to: state, occurredAt: timestamp.toISOString() });

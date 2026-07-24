@@ -29,6 +29,7 @@
       <div class="stat"><span>Agent state</span><strong id="state" class="state">connecting</strong></div>
       <div class="stat"><span>Server state</span><strong id="serverState">—</strong></div>
       <div class="stat"><span>Queue</span><strong id="queue">0</strong></div>
+      <div class="stat"><span>Build version</span><strong id="agentVersion">—</strong></div>
       <div class="stat"><span>Uptime</span><strong id="uptime">0s</strong></div>
       <div class="stat" style="grid-column:1/3"><span>Agent ID</span><strong id="agentId">—</strong></div>
       <div class="stat" style="grid-column:1/3"><span>Connected server</span><strong id="connectedServerUrl">—</strong></div>
@@ -100,7 +101,7 @@
   function toast(message) { const node=el('toast'); node.textContent=message; node.classList.add('show'); setTimeout(()=>node.classList.remove('show'),2200); }
   function formatLog(record){const parts=[record.msg||'Agent event'];if(record.taskCount!=null)parts.push(`tasks=${record.taskCount}`);if(record.currentQueueSize!=null)parts.push(`queue=${record.currentQueueSize}`);if(record.collector)parts.push(`collector=${record.collector}`);if(record.status)parts.push(`status=${record.status}`);if(record.queueItemId)parts.push(`queueItem=${record.queueItemId}`);if(record.latencyMs!=null)parts.push(`latency=${record.latencyMs}ms`);if(record.err?.message)parts.push(`error=${record.err.message}`);return parts.join(' · ');}
   function snapshot(data) {
-    el('state').textContent=data.state||'unknown'; el('queue').textContent=data.queueDepth??0; el('connectedServerUrl').textContent=`${data.connectionMode||'—'} · ${data.serverUrl||'—'}`;
+    el('state').textContent=data.state||'unknown'; el('queue').textContent=data.queueDepth??0; el('agentVersion').textContent=data.agentVersion||'unknown'; el('connectedServerUrl').textContent=`${data.connectionMode||'—'} · ${data.serverUrl||'—'}`;
     el('uptime').textContent=`${data.uptimeSeconds??0}s`; el('agentId').textContent=data.agentId||'—'; el('heartbeat').textContent=`${fmtTime(data.lastHeartbeatAt)} ${data.lastHeartbeatError?'✕':'✓'}`; el('poll').textContent=`${fmtTime(data.lastPollAt)} ${data.lastPollError?'✕':'✓'}`;
     const serverState=el('serverState'); serverState.textContent=data.serverConnectionState||'unknown'; serverState.className=['connected','mock'].includes(data.serverConnectionState)?'connection-good':['unreachable','authentication-degraded'].includes(data.serverConnectionState)?'connection-bad':'connection-wait';
     const authHealth=el('authHealth');authHealth.textContent=data.healthState==='authentication-degraded'?`DEGRADED · ${data.consecutiveUploadAuthFailures}/${data.authFailureThreshold} consecutive 401/403 uploads`:`healthy · ${data.consecutiveUploadAuthFailures||0} consecutive failures`;authHealth.className=data.healthState==='authentication-degraded'?'connection-bad':'connection-good';
