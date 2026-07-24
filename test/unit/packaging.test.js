@@ -42,7 +42,8 @@ test('Windows uninstall deletes only the confirmed install tree while upgrades p
     assert.doesNotMatch(script, /service install";[^\n]*postinstall/);
     assert.match(script, /service uninstall --remove-data/);
     assert.match(script, /#ifndef MyPreconfigured/);
-  assert.match(script, /#if MyPreconfigured == 1[\s\S]*BakedEnrollment := True/);
+  assert.match(script, /#if MyPreconfigured == "1"[\s\S]*BakedEnrollment := True/);
+  assert.doesNotMatch(script, /#if MyPreconfigured == 1/);
   assert.doesNotMatch(script, /LoadStringFromFile\(ExpandConstant\('\{#MyConfig\}'\)/);
   assert.match(script, /\[UninstallDelete\][\s\S]*Type: filesandordirs; Name: "\{app\}"/);
   assert.match(script, /Type "yes" to confirm/);

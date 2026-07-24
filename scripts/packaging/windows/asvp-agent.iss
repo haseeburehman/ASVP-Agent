@@ -190,7 +190,7 @@ end;
 
 procedure InitializeWizard();
 begin
-#if MyPreconfigured == 1
+#if MyPreconfigured == "1"
   BakedEnrollment := True;
 #else
   BakedEnrollment := False;
