@@ -119,7 +119,7 @@ var
   AnswerEdit: TNewEdit;
   OkButton, CancelButton: TNewButton;
 begin
-  Form := CreateCustomForm();
+  Form := CreateCustomForm;
   try
     Form.Caption := 'Remove ASVP Agent';
     Form.ClientWidth := ScaleX(460);
@@ -162,16 +162,16 @@ begin
     CancelButton.ModalResult := mrCancel;
 
     Form.ActiveControl := AnswerEdit;
-    Result := (Form.ShowModal() = mrOk) and
+    Result := (Form.ShowModal = mrOk) and
       (Lowercase(Trim(AnswerEdit.Text)) = 'yes');
   finally
-    Form.Free();
+    Form.Free;
   end;
 end;
 
 function InitializeUninstall(): Boolean;
 begin
-  Result := ConfirmCompleteRemoval();
+  Result := ConfirmCompleteRemoval;
   if not Result then
     MsgBox('Uninstall was cancelled. No ASVP installation data was removed.', mbInformation, MB_OK);
 end;
