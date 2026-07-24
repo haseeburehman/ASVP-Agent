@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { CredentialStore } from '../../src/security/credentials.js';
-import { loadOrRegisterIdentity } from '../../src/transport/api-client.js';
+import { loadOrRegisterIdentity, ManagementHttpError } from '../../src/transport/api-client.js';
 
 function createKeychainMock() {
   let value = null;
@@ -66,6 +66,26 @@ test('loads restricted-file identity when an available keychain returns no value
   }
 });
 
+test('packaged agents ignore stale account-scoped keychain identity when the shared identity file is absent', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-packaged-identity-'));
+  const identityPath = path.join(directory, 'identity.json');
+  const staleIdentity = {
+    agentId: 'deleted-agent',
+    authToken: 'deleted-token',
+    encryptionKey: Buffer.alloc(32, 8).toString('base64'),
+  };
+  try {
+    const store = await new CredentialStore({
+      identityPath,
+      preferIdentityFile: true,
+      keychain: { async getPassword() { return JSON.stringify(staleIdentity); } },
+    }).initialize();
+    assert.equal(await store.loadIdentity(), null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('forced registration replaces the persisted identity', async () => {
   const store = await new CredentialStore({
     identityPath: 'unused.json',
@@ -80,6 +100,46 @@ test('forced registration replaces the persisted identity', async () => {
   assert.equal(replacement.identity.agentId, 'agent-2');
   assert.deepEqual(persisted, replacement.identity);
   assert.equal(apiClient.calls, 2);
+});
+
+test('re-registers when the server rejects a persisted identity', async () => {
+  const store = await new CredentialStore({
+    identityPath: 'unused.json',
+    keychain: createKeychainMock(),
+  }).initialize();
+  const apiClient = createApiClientMock();
+  const first = await loadOrRegisterIdentity({ credentialStore: store, apiClient });
+
+  const replacement = await loadOrRegisterIdentity({
+    credentialStore: store,
+    apiClient,
+    validateExisting: async () => { throw new ManagementHttpError(401); },
+  });
+
+  assert.equal(replacement.registered, true);
+  assert.notEqual(replacement.identity.agentId, first.identity.agentId);
+  assert.deepEqual(await store.loadIdentity(), replacement.identity);
+  assert.equal(apiClient.calls, 2);
+});
+
+test('keeps persisted identity when startup validation fails transiently', async () => {
+  const store = await new CredentialStore({
+    identityPath: 'unused.json',
+    keychain: createKeychainMock(),
+  }).initialize();
+  const apiClient = createApiClientMock();
+  const first = await loadOrRegisterIdentity({ credentialStore: store, apiClient });
+
+  const reused = await loadOrRegisterIdentity({
+    credentialStore: store,
+    apiClient,
+    validateExisting: async () => { throw new ManagementHttpError(503); },
+  });
+
+  assert.equal(reused.registered, false);
+  assert.deepEqual(reused.identity, first.identity);
+  assert.equal(reused.validationError.status, 503);
+  assert.equal(apiClient.calls, 1);
 });
 
 test('incomplete existing identity is sent as previousAgentId during migration registration', async () => {

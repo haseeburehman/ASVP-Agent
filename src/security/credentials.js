@@ -24,10 +24,11 @@ async function writePrivateJson(filePath, value) {
 }
 
 export class CredentialStore {
-  constructor({ identityPath, keychain, logger, cwd = process.cwd() }) {
+  constructor({ identityPath, keychain, logger, cwd = process.cwd(), preferIdentityFile = Boolean(process.pkg) }) {
     this.identityPath = path.resolve(cwd, identityPath);
     this.keychain = keychain;
     this.logger = logger;
+    this.preferIdentityFile = preferIdentityFile;
   }
 
   async initialize() {
@@ -65,6 +66,14 @@ export class CredentialStore {
   }
 
   async loadIdentity() {
+    if (this.preferIdentityFile) {
+      try {
+        return JSON.parse(await readFile(this.identityPath, 'utf8'));
+      } catch (error) {
+        if (error.code === 'ENOENT') return null;
+        throw new Error(`Unable to read local agent identity: ${error.message}`, { cause: error });
+      }
+    }
     if (this.keychain) {
       try {
         const serialized = await this.keychain.getPassword(serviceName, accountName);
@@ -89,7 +98,7 @@ export class CredentialStore {
     if (this.keychain) {
       try {
         await this.keychain.setPassword(serviceName, accountName, JSON.stringify(identity));
-        if (process.pkg) await writePrivateJson(this.identityPath, identity);
+        if (this.preferIdentityFile) await writePrivateJson(this.identityPath, identity);
         return;
       } catch (error) {
         this.logger?.warn({ err: error }, 'OS keychain write failed; using restricted identity file fallback');

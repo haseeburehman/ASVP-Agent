@@ -32,16 +32,23 @@ export class AgentLifecycle {
 
   async start() {
     await this.credentialStore.initialize();
+    const metadata = {
+      hostname: os.hostname(),
+      platform: process.platform,
+      architecture: process.arch,
+      agentVersion: this.version,
+      enrollmentToken: this.config.server.enrollmentToken,
+    };
     const { identity, registered } = await loadOrRegisterIdentity({
       credentialStore: this.credentialStore,
       apiClient: this.apiClient,
-      metadata: {
-        hostname: os.hostname(),
-        platform: process.platform,
-        architecture: process.arch,
+      metadata,
+      validateExisting: (existing) => this.apiClient.sendHeartbeat(existing, {
+        agentId: existing.agentId,
+        hostname: metadata.hostname,
         agentVersion: this.version,
-        enrollmentToken: this.config.server.enrollmentToken,
-      },
+        startupCredentialValidation: true,
+      }),
     });
     this.logger.info({ agentId: identity.agentId, registered }, registered ? 'Agent registered' : 'Loaded existing agent identity');
 

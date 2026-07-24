@@ -148,10 +148,18 @@ export class ApiClient {
   }
 }
 
-export async function loadOrRegisterIdentity({ credentialStore, apiClient, force = false, metadata = {} }) {
+export async function loadOrRegisterIdentity({ credentialStore, apiClient, force = false, metadata = {}, validateExisting }) {
   const existing = await credentialStore.loadIdentity();
   if (!force && existing?.agentId && existing?.authToken && existing?.encryptionKey) {
-    return { identity: existing, registered: false };
+    if (typeof validateExisting !== 'function') return { identity: existing, registered: false };
+    try {
+      await validateExisting(existing);
+      return { identity: existing, registered: false };
+    } catch (error) {
+      if (![401, 403].includes(Number(error?.status))) {
+        return { identity: existing, registered: false, validationError: error };
+      }
+    }
   }
 
   const registrationMetadata = existing?.agentId
