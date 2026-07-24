@@ -119,11 +119,9 @@ var
   AnswerEdit: TNewEdit;
   OkButton, CancelButton: TNewButton;
 begin
-  Form := CreateCustomForm;
+  Form := CreateCustomForm(ScaleX(460), ScaleY(170), False, False);
   try
     Form.Caption := 'Remove ASVP Agent';
-    Form.ClientWidth := ScaleX(460);
-    Form.ClientHeight := ScaleY(170);
     Form.Position := poScreenCenter;
 
     PromptLabel := TNewStaticText.Create(Form);
