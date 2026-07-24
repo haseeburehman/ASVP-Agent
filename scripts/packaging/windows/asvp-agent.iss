@@ -112,14 +112,66 @@ begin
   else Result := IsLoopbackAuthority(Authority);
 end;
 
-function InitializeUninstall(): Boolean;
+function ConfirmCompleteRemoval(): Boolean;
 var
-  Answer: String;
+  Form: TSetupForm;
+  PromptLabel: TNewStaticText;
+  AnswerEdit: TNewEdit;
+  OkButton, CancelButton: TNewButton;
 begin
-  Answer := '';
-  Result := InputQuery('Remove ASVP Agent',
-    'This removes the service, identity, queued results, logs, configuration, and every file under ' + ExpandConstant('{app}') + '. Type "yes" to confirm:',
-    False, Answer) and (Lowercase(Trim(Answer)) = 'yes');
+  Form := CreateCustomForm();
+  try
+    Form.Caption := 'Remove ASVP Agent';
+    Form.ClientWidth := ScaleX(460);
+    Form.ClientHeight := ScaleY(170);
+    Form.Position := poScreenCenter;
+
+    PromptLabel := TNewStaticText.Create(Form);
+    PromptLabel.Parent := Form;
+    PromptLabel.Left := ScaleX(12);
+    PromptLabel.Top := ScaleY(12);
+    PromptLabel.Width := Form.ClientWidth - ScaleX(24);
+    PromptLabel.Height := ScaleY(72);
+    PromptLabel.AutoSize := False;
+    PromptLabel.WordWrap := True;
+    PromptLabel.Caption := 'This removes the service, identity, queued results, logs, configuration, and every file under ' + ExpandConstant('{app}') + '.' + #13#10 + #13#10 + 'Type "yes" to confirm:';
+
+    AnswerEdit := TNewEdit.Create(Form);
+    AnswerEdit.Parent := Form;
+    AnswerEdit.Left := ScaleX(12);
+    AnswerEdit.Top := ScaleY(90);
+    AnswerEdit.Width := Form.ClientWidth - ScaleX(24);
+    AnswerEdit.Text := '';
+
+    OkButton := TNewButton.Create(Form);
+    OkButton.Parent := Form;
+    OkButton.Caption := 'Uninstall';
+    OkButton.Left := Form.ClientWidth - ScaleX(180);
+    OkButton.Top := ScaleY(130);
+    OkButton.Width := ScaleX(80);
+    OkButton.Default := True;
+    OkButton.ModalResult := mrOk;
+
+    CancelButton := TNewButton.Create(Form);
+    CancelButton.Parent := Form;
+    CancelButton.Caption := 'Cancel';
+    CancelButton.Left := Form.ClientWidth - ScaleX(92);
+    CancelButton.Top := ScaleY(130);
+    CancelButton.Width := ScaleX(80);
+    CancelButton.Cancel := True;
+    CancelButton.ModalResult := mrCancel;
+
+    Form.ActiveControl := AnswerEdit;
+    Result := (Form.ShowModal() = mrOk) and
+      (Lowercase(Trim(AnswerEdit.Text)) = 'yes');
+  finally
+    Form.Free();
+  end;
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := ConfirmCompleteRemoval();
   if not Result then
     MsgBox('Uninstall was cancelled. No ASVP installation data was removed.', mbInformation, MB_OK);
 end;
