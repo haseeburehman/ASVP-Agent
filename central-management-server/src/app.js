@@ -7,6 +7,7 @@ import { createDashboardSessions } from './dashboard-session.js';
 import { computeFleetStatus } from './fleet-status.js';
 
 const dashboardRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', 'dashboard');
+export const BASELINE_COLLECTORS = Object.freeze(['os-info', 'apps', 'compliance-checks', 'users-groups', 'antivirus-status']);
 function httpError(status, message) { const error = new Error(message); error.status = status; return error; }
 function requireString(value, name) { if (typeof value !== 'string' || !value.trim()) throw httpError(400, `${name} must be a non-empty string`); return value.trim(); }
 function requireObject(value, name) { if (!value || typeof value !== 'object' || Array.isArray(value)) throw httpError(400, `${name} must be an object`); return value; }
@@ -56,6 +57,10 @@ export function createApp({
   requireEnrollmentToken = false,
   expectedHeartbeatIntervalMs = 30000,
   secureDashboardCookie = false,
+  baselineRescanIntervalMs = 24 * 60 * 60 * 1000,
+  baselineCollectors = BASELINE_COLLECTORS,
+  fleetHub = { broadcast() {} },
+  dashboardSessions: suppliedDashboardSessions,
   logger = console,
   now = () => new Date(),
   rateNow = () => Date.now(),
@@ -63,8 +68,10 @@ export function createApp({
   if (typeof adminToken !== 'string' || !adminToken) throw new Error('createApp requires a non-empty adminToken');
   const app = express();
   const authenticate = createAuthenticator(database);
-  const dashboardSessions = createDashboardSessions({ adminToken, now: rateNow });
+  if (!Number.isInteger(baselineRescanIntervalMs) || baselineRescanIntervalMs < 60000) throw new Error('baselineRescanIntervalMs must be at least 60000');
+  const dashboardSessions = suppliedDashboardSessions ?? createDashboardSessions({ adminToken, now: rateNow });
   const limiter = createRateLimiter({ ...adminRateLimit, now: rateNow });
+  const knownFleetStates = new Map();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '25mb' }));
   app.use('/api/admin', limiter, createAdminAuthenticator(adminToken));
@@ -89,6 +96,20 @@ export function createApp({
   const findTask = database.prepare('SELECT id FROM tasks WHERE id = ? AND agent_id = ?');
   const insertTask = database.prepare(`INSERT INTO tasks (id, agent_id, collector_name, params, status, created_at, dispatched_at) VALUES (?, ?, ?, ?, 'pending', ?, NULL)`);
   const findAgentById = database.prepare('SELECT id FROM agents WHERE id = ?');
+  const findLatestBaselineTask = database.prepare('SELECT created_at FROM tasks WHERE agent_id = ? AND collector_name = ? ORDER BY created_at DESC LIMIT 1');
+  function enqueueBaseline(agentId, timestamp, force = false) {
+    const scheduled = [];
+    for (const collectorName of baselineCollectors) {
+      const latest = findLatestBaselineTask.get(agentId, collectorName);
+      const due = force || !latest || new Date(timestamp).getTime() - new Date(latest.created_at).getTime() >= baselineRescanIntervalMs;
+      if (!due) continue;
+      const taskId = randomUUID();
+      insertTask.run(taskId, agentId, collectorName, '{}', timestamp);
+      event(agentId, 'task-created', { taskId, collectorName, source: 'baseline' }, timestamp);
+      scheduled.push({ taskId, collectorName });
+    }
+    return scheduled;
+  }
   const insertEnrollmentToken = database.prepare('INSERT INTO enrollment_tokens (token_hash, created_at, expires_at, max_uses, use_count) VALUES (?, ?, ?, ?, 0)');
   const findUsableEnrollmentTokens = database.prepare(`SELECT token_hash FROM enrollment_tokens WHERE expires_at > ? AND (max_uses IS NULL OR use_count < max_uses)`);
   const consumeEnrollmentToken = database.prepare(`UPDATE enrollment_tokens SET use_count = use_count + 1 WHERE token_hash = ? AND expires_at > ? AND (max_uses IS NULL OR use_count < max_uses)`);
@@ -108,7 +129,8 @@ export function createApp({
     const secrets = generateAgentSecrets();
     insertAgent.run(agentId, hostname, hashToken(secrets.authToken), secrets.encryptionKey, timestamp, platform, architecture);
     event(agentId, 'register', { continuity: 'new-agent', hostname, platform, architecture }, timestamp);
-    return { agentId, ...secrets };
+    const baselineTasks = enqueueBaseline(agentId, timestamp, true);
+    return { agentId, ...secrets, baselineTasks };
   });
 
   app.post('/api/agents/register', (request, response, next) => {
@@ -130,7 +152,11 @@ export function createApp({
       } else {
         identity = registerNew({ hostname, platform, architecture, enrollmentToken: body.enrollmentToken });
       }
-      logger.info({ event: 'register', agentId: identity.agentId, previousAgentId, continuity: continuityAuthorized ? 'reused-existing-agent' : 'new-agent', hostname, platform, architecture });
+      const baselineTasks = identity.baselineTasks ?? [];
+      delete identity.baselineTasks;
+      logger.info({ event: 'register', agentId: identity.agentId, previousAgentId, continuity: continuityAuthorized ? 'reused-existing-agent' : 'new-agent', hostname, platform, architecture, baselineTaskCount: baselineTasks.length });
+      knownFleetStates.set(identity.agentId, 'never-connected');
+      fleetHub.broadcast({ type: 'agent-registered', agentId: identity.agentId, hostname, platform, architecture, continuity: continuityAuthorized, baselineTaskCount: baselineTasks.length });
       response.status(201).json(identity);
     } catch (error) { next(error); }
   });
@@ -142,8 +168,12 @@ export function createApp({
       if (agentId !== request.agent.id) throw httpError(403, 'Heartbeat agentId does not match bearer token');
       const hostname = requireString(body.hostname, 'hostname');
       const timestamp = now().toISOString();
+      const previousStatus = computeFleetStatus(request.agent, { now: now(), expectedHeartbeatIntervalMs }).state;
       updateHeartbeat.run(hostname, timestamp, agentId);
       event(agentId, 'heartbeat', { hostname, uptimeSeconds: body.uptimeSeconds ?? null, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null }, timestamp);
+      fleetHub.broadcast({ type: 'heartbeat', agentId, hostname, receivedAt: timestamp, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null });
+      if (previousStatus !== 'online') fleetHub.broadcast({ type: 'status-transition', agentId, from: previousStatus, to: 'online', occurredAt: timestamp });
+      knownFleetStates.set(agentId, 'online');
       logger.info({ event: 'heartbeat', agentId, hostname });
       response.json({ accepted: true, receivedAt: timestamp });
     } catch (error) { next(error); }
@@ -156,9 +186,10 @@ export function createApp({
       if (agentId !== request.agent.id) throw httpError(403, 'Task poll agentId does not match bearer token');
       const timestamp = now().toISOString();
       updatePoll.run(timestamp, agentId);
+      const baselineTasks = enqueueBaseline(agentId, timestamp);
       const tasks = dispatchPending(agentId, timestamp).map((task) => ({ taskId: task.id, collectorName: task.collector_name, params: JSON.parse(task.params), scheduledAt: task.created_at }));
       event(agentId, 'poll', { taskCount: tasks.length, taskIds: tasks.map((task) => task.taskId) }, timestamp);
-      logger.info({ event: 'poll', agentId, taskCount: tasks.length, taskIds: tasks.map((task) => task.taskId) });
+      logger.info({ event: 'poll', agentId, taskCount: tasks.length, taskIds: tasks.map((task) => task.taskId), baselineTaskCount: baselineTasks.length });
       response.json(tasks);
     } catch (error) { next(error); }
   });
@@ -187,6 +218,20 @@ export function createApp({
       insertResult.run(queueItemId, agentId, taskId, collector, status, JSON.stringify(result), receivedAt);
       if (taskId) completeTask.run(status === 'success' ? 'completed' : 'failed', taskId, agentId);
       event(agentId, 'result', { queueItemId, taskId, reportedTaskId, collector, status }, receivedAt);
+      const data = result.data && typeof result.data === 'object' ? result.data : null;
+      fleetHub.broadcast({
+        type: 'result-received',
+        agentId,
+        queueItemId,
+        taskId,
+        collector,
+        status,
+        receivedAt,
+        summary: data ? {
+          itemCount: Array.isArray(data) ? data.length : undefined,
+          keys: Array.isArray(data) ? undefined : Object.keys(data).slice(0, 12),
+        } : null,
+      });
       logger.info({ event: 'result', agentId, queueItemId, taskId, reportedTaskId, collector, status });
       response.json({ accepted: true, queueItemId });
     } catch (error) { next(error); }
@@ -260,6 +305,17 @@ export function createApp({
   app.get('/', (request, response) => response.redirect(302, dashboardSessions.valid(request) ? '/fleet' : '/login'));
   app.get('/fleet', dashboardPageAuth, dashboardPage);
   app.get('/fleet/agents/:agentId', dashboardPageAuth, dashboardPage);
+
+  app.locals.dashboardSessions = dashboardSessions;
+  app.locals.sweepFleetStatuses = () => {
+    const timestamp = now();
+    for (const agent of database.prepare('SELECT id, last_heartbeat_at FROM agents').all()) {
+      const state = computeFleetStatus(agent, { now: timestamp, expectedHeartbeatIntervalMs }).state;
+      const previous = knownFleetStates.get(agent.id);
+      if (previous && previous !== state) fleetHub.broadcast({ type: 'status-transition', agentId: agent.id, from: previous, to: state, occurredAt: timestamp.toISOString() });
+      knownFleetStates.set(agent.id, state);
+    }
+  };
 
   app.use((error, _request, response, _next) => {
     const status = Number(error.status) || (error.type === 'entity.parse.failed' ? 400 : 500);

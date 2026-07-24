@@ -128,6 +128,7 @@ export const configSchema = {
           uploadConcurrency: { type: 'integer', minimum: 1 },
           maxPayloadWarningBytes: { type: 'integer', minimum: 1 },
           authFailureThreshold: { type: 'integer', minimum: 1 },
+          rescanIntervalMs: { type: 'integer', minimum: 60000 },
         },
       },
     },

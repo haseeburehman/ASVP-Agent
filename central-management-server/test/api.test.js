@@ -14,7 +14,7 @@ const logger = { info() {}, warn() {}, error() {} };
 function setup(options = {}) {
   const database = createDatabase({ filename: ':memory:' });
   const adminToken = options.adminToken ?? 'test-admin-token';
-  const app = createApp({ database, adminToken, logger, adminRateLimit: options.adminRateLimit });
+  const app = createApp({ database, adminToken, logger, adminRateLimit: options.adminRateLimit, baselineCollectors: options.baselineCollectors ?? [] });
   return { database, api: request(app), adminToken };
 }
 

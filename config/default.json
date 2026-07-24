@@ -98,6 +98,17 @@
       "timeoutMs": 30000,
       "concurrency": 1,
       "commandTimeoutMs": 8000
+    },
+    "users-groups": {
+      "timeoutMs": 15000,
+      "concurrency": 1
+    },
+    "antivirus-status": {
+      "timeoutMs": 20000,
+      "concurrency": 1
+    },
+    "baseline": {
+      "rescanIntervalMs": 86400000
     }
   }
 }

@@ -47,6 +47,18 @@ const builtInDefinitions = {
     timeoutMs: 30000,
     concurrency: 1,
   },
+  'users-groups': {
+    modulePath: '../collectors/users-groups/index.js',
+    implemented: true,
+    timeoutMs: 15000,
+    concurrency: 1,
+  },
+  'antivirus-status': {
+    modulePath: '../collectors/antivirus-status/index.js',
+    implemented: true,
+    timeoutMs: 20000,
+    concurrency: 1,
+  },
 };
 
 export class CollectorNotImplementedError extends Error {

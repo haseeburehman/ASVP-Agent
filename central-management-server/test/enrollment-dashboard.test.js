@@ -8,7 +8,7 @@ const logger = { info() {}, warn() {}, error() {} };
 function setup(options = {}) {
   const database = createDatabase({ filename: ':memory:' });
   let clock = new Date('2026-01-01T00:00:00.000Z');
-  const app = createApp({ database, adminToken: 'admin-secret', logger, now: () => new Date(clock), rateNow: () => clock.getTime(), ...options });
+  const app = createApp({ database, adminToken: 'admin-secret', logger, now: () => new Date(clock), rateNow: () => clock.getTime(), baselineCollectors: [], ...options });
   return { database, app, api: request(app), setTime(value) { clock = new Date(value); } };
 }
 async function token(api, body = {}) {

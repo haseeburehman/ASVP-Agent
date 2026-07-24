@@ -33,7 +33,7 @@ test('real AgentLifecycle registers, heartbeats, polls, runs os-info, and upload
   const database = createDatabase({ filename: ':memory:' });
   const events = [];
   const adminToken = 'integration-admin-token';
-  const app = createApp({ database, adminToken, logger: { info: (event) => events.push(event), warn() {}, error() {} } });
+  const app = createApp({ database, adminToken, baselineCollectors: [], logger: { info: (event) => events.push(event), warn() {}, error() {} } });
   const server = await listen(app);
   let lifecycle;
   try {
