@@ -27,6 +27,7 @@ jobs:
     env:
       PACKAGE_PLATFORM: win
       PACKAGE_ARCH: ${{ matrix.arch }}
+      ASVP_DEFAULT_SERVER_URL: ${{ vars.ASVP_DEFAULT_SERVER_URL || secrets.ASVP_DEFAULT_SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,9 +59,10 @@ jobs:
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $binary = (Resolve-Path "dist/win-${{ matrix.arch }}/asvp-agent-$version-win-${{ matrix.arch }}.exe").Path
+          $config = (Resolve-Path "dist/win-${{ matrix.arch }}/config/default.json").Path
           $iscc = Join-Path -Path ${env:ProgramFiles(x86)} -ChildPath 'Inno Setup 6\ISCC.exe'
           $iscc = (Resolve-Path $iscc).Path
-          & $iscc "/DMyVersion=$version" "/DMyArch=${{ matrix.arch }}" "/DMyBinary=$binary" scripts/packaging/windows/asvp-agent.iss
+          & $iscc "/DMyVersion=$version" "/DMyArch=${{ matrix.arch }}" "/DMyBinary=$binary" "/DMyConfig=$config" scripts/packaging/windows/asvp-agent.iss
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
@@ -75,6 +77,7 @@ jobs:
     env:
       PACKAGE_PLATFORM: linux
       PACKAGE_ARCH: x64
+      ASVP_DEFAULT_SERVER_URL: ${{ vars.ASVP_DEFAULT_SERVER_URL || secrets.ASVP_DEFAULT_SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -100,7 +103,7 @@ jobs:
           version=$(node -p "require('./package.json').version")
           root="$PWD/dist/linux-package-root"
           install -Dm755 "dist/linux-x64/asvp-agent-$version-linux-x64" "$root/opt/asvp-agent/asvp-agent"
-          install -Dm640 config/default.json "$root/etc/asvp-agent/config.json"
+          install -Dm640 dist/linux-x64/config/default.json "$root/etc/asvp-agent/config.json"
           install -Dm644 src/dashboard/public/index.html "$root/opt/asvp-agent/public/index.html"
           mkdir -p "$root/opt/asvp-agent/var" "$root/usr/local/bin"
           ln -s /opt/asvp-agent/asvp-agent "$root/usr/local/bin/asvp-agent"
@@ -133,6 +136,7 @@ jobs:
     env:
       PACKAGE_PLATFORM: macos
       PACKAGE_ARCH: ${{ matrix.arch }}
+      ASVP_DEFAULT_SERVER_URL: ${{ vars.ASVP_DEFAULT_SERVER_URL || secrets.ASVP_DEFAULT_SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -159,7 +163,7 @@ jobs:
           scripts="$PWD/dist/macos-package-scripts"
           mkdir -p "$root/Library/Application Support/ASVP Agent/config" "$root/Library/Application Support/ASVP Agent/public" "$root/Library/Application Support/ASVP Agent/var" "$root/usr/local/bin" "$scripts"
           install -m755 "dist/macos-${{ matrix.arch }}/asvp-agent-$version-macos-${{ matrix.arch }}" "$root/Library/Application Support/ASVP Agent/asvp-agent"
-          install -m640 config/default.json "$root/Library/Application Support/ASVP Agent/config/default.json"
+          install -m640 "dist/macos-${{ matrix.arch }}/config/default.json" "$root/Library/Application Support/ASVP Agent/config/default.json"
           install -m644 src/dashboard/public/index.html "$root/Library/Application Support/ASVP Agent/public/index.html"
           ln -s '/Library/Application Support/ASVP Agent/asvp-agent' "$root/usr/local/bin/asvp-agent"
           install -m755 scripts/packaging/macos/postinstall "$scripts/postinstall"

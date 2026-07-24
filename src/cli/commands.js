@@ -303,6 +303,19 @@ export function createProgram({ contextFactory = createContext } = {}) {
     });
 
   const diagnostics = program.command('diagnostics').description('run deployment diagnostics');
+  diagnostics.command('collectors')
+    .description('load every registered collector module and report packaging coverage')
+    .action(async () => {
+      const registry = new CollectorRegistry();
+      const loaded = [];
+      for (const definition of registry.list().filter((entry) => entry.implemented)) {
+        const collector = await registry.get(definition.name);
+        if (collector.name !== definition.name) throw new Error(`Collector module mismatch: registered ${definition.name}, loaded ${collector.name ?? 'unnamed'}`);
+        loaded.push(definition.name);
+      }
+      process.stdout.write(`${JSON.stringify({ loaded }, null, 2)}\n`);
+    });
+
   diagnostics.command('credentials')
     .description('verify the active credential backend with a temporary write/read/delete round trip')
     .option('--require-keychain', 'fail unless the OS keychain backend is loaded and operational')

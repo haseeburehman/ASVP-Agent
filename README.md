@@ -199,6 +199,18 @@ $env:ADMIN_TOKEN = "replace-with-the-same-long-random-secret"
 node .\bin\asvp-agent.js --config .\config\local-dashboard.json dashboard
 ```
 
+## Preconfigured zero-touch builds
+
+Release packaging accepts `ASVP_DEFAULT_SERVER_URL`. When set, the build validates it with the same enrollment URL policy (HTTPS except loopback HTTP, no placeholder, credentials, fragments, or malformed URL) and writes it only into the target-specific `dist/<platform>-<arch>/config/default.json`; the source default remains generic. Invalid values fail packaging before an executable or installer is published.
+
+```sh
+ASVP_DEFAULT_SERVER_URL=https://asvp.company.com npm run package:binary
+```
+
+Windows installers compiled with that target config hide the enrollment page and install/start the service directly, including silent installs. Generic builds retain the enrollment wizard and do not start a service during a silent install without enrollment. Linux/macOS postinstall scripts likewise install the service immediately for a preconfigured config and print the enroll-then-install instructions for a generic placeholder build. `asvp-agent enroll` remains available to override a baked-in URL later.
+
+GitHub release jobs read `ASVP_DEFAULT_SERVER_URL` from the repository variable or secret of that name. Configure one of those values before publishing a production tag.
+
 ## Download & Install
 
 Versioned standalone binaries and native installers are published on the repository's **GitHub Releases** page. Standalone binary names follow `asvp-agent-<version>-<platform>-<arch>` and do not require Node.js or this source tree.

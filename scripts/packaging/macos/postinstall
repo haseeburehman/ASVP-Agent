@@ -1,7 +1,14 @@
 #!/bin/sh
 set -eu
-chmod 0755 '/Library/Application Support/ASVP Agent/asvp-agent'
+binary='/Library/Application Support/ASVP Agent/asvp-agent'
+config='/Library/Application Support/ASVP Agent/config/default.json'
+chmod 0755 "$binary"
 mkdir -p '/Library/Application Support/ASVP Agent/var'
 chmod 0700 '/Library/Application Support/ASVP Agent/var'
-printf '%s\n' 'ASVP Agent installed.' 'Enroll it with your management server, then install the service:' "  sudo '/Library/Application Support/ASVP Agent/asvp-agent' --config '/Library/Application Support/ASVP Agent/config/default.json' enroll" "  sudo '/Library/Application Support/ASVP Agent/asvp-agent' --config '/Library/Application Support/ASVP Agent/config/default.json' service install"
+if grep -q 'management\.example\.invalid' "$config"; then
+  printf '%s\n' 'ASVP Agent installed.' 'Enroll it with your management server, then install the service:' "  sudo '$binary' --config '$config' enroll" "  sudo '$binary' --config '$config' service install"
+else
+  printf '%s\n' 'ASVP Agent installed with a preconfigured management server.' 'Installing and starting its launchd service now.'
+  "$binary" --config "$config" service install
+fi
 exit 0

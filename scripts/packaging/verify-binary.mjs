@@ -42,7 +42,11 @@ try {
     });
   });
   await run(['--help']);
-  await run(['--config', path.join(clean, 'config', 'default.json'), 'scan', '--collector', 'os-info', '--no-queue']);
+  await run(['diagnostics', 'collectors']);
+  const packagedConfig = path.join(clean, 'config', 'default.json');
+  await run(['--config', packagedConfig, 'scan', '--collector', 'os-info', '--no-queue']);
+  await run(['--config', packagedConfig, 'scan', '--collector', 'users-groups', '--no-queue']);
+  await run(['--config', packagedConfig, 'scan', '--collector', 'antivirus-status', '--no-queue']);
   const credentialArgs = ['--config', path.join(clean, 'config', 'default.json'), 'diagnostics', 'credentials'];
   if (process.env.REQUIRE_PACKAGED_KEYCHAIN === 'true') credentialArgs.push('--require-keychain');
   const diagnostic = await run(credentialArgs);

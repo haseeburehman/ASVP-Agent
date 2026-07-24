@@ -1,3 +1,5 @@
+import { applicationMetrics, describeCheck, unwrapCollectorPayload } from './posture-data.js';
+
 const $ = (id) => document.getElementById(id);
 const formatTime = (value) => value ? new Date(value).toLocaleString() : 'Never';
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -42,7 +44,8 @@ async function loadFleet() {
 }
 
 function latestResult(results, collector) {
-  return results.find((result) => result.collector === collector)?.data ?? null;
+  const stored = results.find((result) => result.collector === collector)?.data ?? null;
+  return unwrapCollectorPayload(stored, collector);
 }
 
 function postureCard(title, status, body, raw) {
@@ -55,7 +58,7 @@ function renderPosture(results) {
   const users = latestResult(results, 'users-groups');
   const antivirus = latestResult(results, 'antivirus-status');
   const compliance = latestResult(results, 'compliance-checks');
-  const appItems = apps?.items ?? apps?.applications ?? [];
+  const appMetrics = applicationMetrics(apps);
   const userItems = users?.users?.items ?? [];
   const groups = users?.groups?.items ?? [];
   const privileged = groups.filter((group) => /^(administrators|admin|wheel|sudo)$/i.test(group.name));
@@ -65,7 +68,7 @@ function renderPosture(results) {
       ? `<dl><dt>OS</dt><dd>${escapeHtml(os.prettyName)}</dd><dt>Version</dt><dd>${escapeHtml(os.version)}</dd><dt>Architecture</dt><dd>${escapeHtml(os.architecture)}</dd><dt>Recent patches</dt><dd>${Array.isArray(patchItems) ? patchItems.length : 'Undetermined'}</dd></dl>`
       : '<p>Waiting for baseline result.</p>', os),
     postureCard('Applications', apps ? 'collected' : 'pending', apps
-      ? `<p><strong>${Array.isArray(appItems) ? appItems.length : 'Unknown'}</strong> applications reported.</p>`
+      ? `<p><strong>${escapeHtml(appMetrics.totalDetected)}</strong> applications reported${appMetrics.truncated ? ` (${escapeHtml(appMetrics.shown)} shown, ${escapeHtml(appMetrics.truncated)} truncated)` : ''}.</p>`
       : '<p>Waiting for baseline result.</p>', apps),
     postureCard('Users & privileged groups', users ? 'collected' : 'pending', users
       ? `<p><strong>${userItems.length}</strong> local users and <strong>${groups.length}</strong> groups.</p>${privileged.map((group) => `<p><b>${escapeHtml(group.name)}:</b> ${escapeHtml((group.members ?? []).map((member) => typeof member === 'string' ? member : member.name).join(', ') || 'No explicit members')}</p>`).join('') || '<p>No standard privileged group was reported.</p>'}`
@@ -74,7 +77,7 @@ function renderPosture(results) {
       ? `<p>${escapeHtml(antivirus.reason ?? 'Status reported successfully.')}</p><ul>${(antivirus.products ?? []).map((product) => `<li>${escapeHtml(product.name)} — ${product.enabled === true ? 'enabled' : product.enabled === false ? 'disabled' : 'state unknown'}</li>`).join('')}</ul>`
       : '<p>Waiting for baseline result.</p>', antivirus),
     postureCard('Firewall & compliance', compliance ? 'collected' : 'pending', compliance
-      ? `<dl><dt>Firewall</dt><dd>${escapeHtml(compliance.firewall?.status ?? 'unknown')}</dd><dt>SSH root login</dt><dd>${escapeHtml(compliance.ssh?.permitRootLogin?.value ?? compliance.ssh?.permitRootLogin?.status ?? 'unknown')}</dd><dt>SSH password auth</dt><dd>${escapeHtml(compliance.ssh?.passwordAuthentication?.value ?? compliance.ssh?.passwordAuthentication?.status ?? 'unknown')}</dd></dl>`
+      ? `<dl><dt>Firewall</dt><dd>${escapeHtml(describeCheck(compliance.firewall, (active) => active === true ? 'active' : active === false ? 'inactive' : null))}</dd><dt>SSH root login</dt><dd>${escapeHtml(describeCheck(compliance.ssh?.permitRootLogin))}</dd><dt>SSH password auth</dt><dd>${escapeHtml(describeCheck(compliance.ssh?.passwordAuthentication))}</dd><dt>UAC</dt><dd>${escapeHtml(describeCheck(compliance.uac, (value) => value?.name ?? value?.level ?? value))}</dd></dl>`
       : '<p>Waiting for baseline result.</p>', compliance),
   ].join('');
 }

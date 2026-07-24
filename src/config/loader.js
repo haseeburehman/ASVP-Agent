@@ -96,6 +96,12 @@ export async function loadConfig(options = {}) {
   if (config.retry.maximumDelayMs < config.retry.initialDelayMs) {
     throw new Error('Invalid agent configuration: /retry/maximumDelayMs must be greater than or equal to initialDelayMs');
   }
+  for (const [name, innerKey] of [['os-info', 'patchCheckTimeoutMs'], ['compliance-checks', 'commandTimeoutMs']]) {
+    const collector = config.collectors[name];
+    if (collector?.[innerKey] >= collector?.timeoutMs) {
+      throw new Error(`Invalid agent configuration: /collectors/${name}/${innerKey} must be less than timeoutMs so the collector can finish cleanly`);
+    }
+  }
 
   return config;
 }

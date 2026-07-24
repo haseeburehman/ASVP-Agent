@@ -24,7 +24,7 @@ function testConfig(directory) {
     retry: { initialDelayMs: 100, maximumDelayMs: 1000 },
     collectors: {
       upload: { intervalMs: 60000, uploadConcurrency: 1, maxPayloadWarningBytes: 1_000_000 },
-      'os-info': { timeoutMs: 10000, concurrency: 1 },
+      'os-info': { timeoutMs: 25000, concurrency: 1, patchCheckTimeoutMs: 15000 },
       'network-scan': {
         allowedCidrs: [], maxCidrSize: 16, allowWideRanges: false, timeoutMs: 1000, concurrency: 1,
         maxConcurrentTargets: 1, maxConcurrentPortsPerHost: 1, maxPortsPerHost: 10,

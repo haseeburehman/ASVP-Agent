@@ -4,6 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { buildAgentBundle } from './esbuild.config.mjs';
+import { preparePackagedConfig } from './prepare-config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const metadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -20,11 +21,19 @@ const outputPath = path.join(outputDirectory, `asvp-agent-${metadata.version}-${
 const pkgExecutable = path.join(root, 'node_modules', '@yao-pkg', 'pkg', 'lib-es5', 'bin.js');
 await mkdir(path.join(outputDirectory, 'config'), { recursive: true });
 await mkdir(path.join(outputDirectory, 'public'), { recursive: true });
-await copyFile(path.join(root, 'config', 'default.json'), path.join(outputDirectory, 'config', 'default.json'));
+const packagedConfigPath = path.join(outputDirectory, 'config', 'default.json');
+const packagedConfig = await preparePackagedConfig({
+  sourcePath: path.join(root, 'config', 'default.json'),
+  destinationPath: packagedConfigPath,
+  defaultServerUrl: process.env.ASVP_DEFAULT_SERVER_URL?.trim(),
+});
+process.stdout.write(`Packaged management URL: ${packagedConfig.serverUrl} (${packagedConfig.preconfigured ? 'preconfigured' : 'generic enrollment build'})\n`);
 await copyFile(path.join(root, 'src', 'dashboard', 'public', 'index.html'), path.join(outputDirectory, 'public', 'index.html'));
 
-await buildAgentBundle({ root, outputPath: bundlePath, version: metadata.version });
+const coverage = await buildAgentBundle({ root, outputPath: bundlePath, version: metadata.version });
+process.stdout.write(`Auto-discovered bundled collectors: ${coverage.registeredCollectors.join(', ')}\n`);
 await run(process.execPath, [bundlePath, '--help'], 'plain Node bundle help smoke test');
+await run(process.execPath, [bundlePath, 'diagnostics', 'collectors'], 'plain Node bundle collector coverage verification');
 await run(process.execPath, [bundlePath, '--config', path.join(outputDirectory, 'config', 'default.json'), 'scan', '--collector', 'os-info', '--no-queue'], 'plain Node bundle collector smoke test');
 
 await run(process.execPath, [

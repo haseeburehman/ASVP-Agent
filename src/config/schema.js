@@ -124,6 +124,7 @@ export const configSchema = {
           nmapTimeoutMs: { type: 'integer', minimum: 1 },
           expiryWarningDays: { type: 'integer', minimum: 0 },
           commandTimeoutMs: { type: 'integer', minimum: 1 },
+                    patchCheckTimeoutMs: { type: 'integer', minimum: 1 },
           intervalMs: { type: 'integer', minimum: 100 },
           uploadConcurrency: { type: 'integer', minimum: 1 },
           maxPayloadWarningBytes: { type: 'integer', minimum: 1 },

@@ -356,7 +356,7 @@ export function createComplianceChecksCollector({
     name: 'compliance-checks',
     version: '1.0.0',
     async run(_params = {}, context = {}) {
-      const timeoutMs = context.collectorConfig?.commandTimeoutMs ?? 8000;
+      const timeoutMs = context.collectorConfig?.commandTimeoutMs ?? 20000;
       const common = {
         runCommand,
         readTextFile,

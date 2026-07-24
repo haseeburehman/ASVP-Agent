@@ -44,8 +44,9 @@
       "concurrency": 2
     },
     "os-info": {
-      "timeoutMs": 10000,
-      "concurrency": 1
+      "timeoutMs": 25000,
+      "concurrency": 1,
+      "patchCheckTimeoutMs": 15000
     },
     "apps": {
       "timeoutMs": 20000,
@@ -95,9 +96,9 @@
       "maxScanOperationsPerTask": 100000
     },
     "compliance-checks": {
-      "timeoutMs": 30000,
+      "timeoutMs": 45000,
       "concurrency": 1,
-      "commandTimeoutMs": 8000
+      "commandTimeoutMs": 20000
     },
     "users-groups": {
       "timeoutMs": 15000,

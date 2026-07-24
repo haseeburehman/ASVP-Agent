@@ -7,6 +7,9 @@
 #ifndef MyBinary
   #error MyBinary must be defined
 #endif
+#ifndef MyConfig
+  #error MyConfig must be defined
+#endif
 
 #define MyAppName "ASVP Agent"
 #define MyExeName "asvp-agent.exe"
@@ -30,7 +33,7 @@ WizardStyle=modern
 
 [Files]
 Source: "{#MyBinary}"; DestDir: "{app}"; DestName: "{#MyExeName}"; Flags: ignoreversion
-Source: "..\\..\\..\\config\\default.json"; DestDir: "{app}\\config"; Flags: ignoreversion onlyifdoesntexist
+Source: "{#MyConfig}"; DestDir: "{app}\\config"; DestName: "default.json"; Flags: ignoreversion onlyifdoesntexist
 Source: "..\\..\\..\\src\\dashboard\\public\\index.html"; DestDir: "{app}\\public"; Flags: ignoreversion
 
 [Dirs]
@@ -40,12 +43,13 @@ Name: "{app}\var"; Permissions: users-modify
 Name: "{group}\ASVP Agent Command Prompt"; Filename: "{cmd}"; Parameters: "/K cd /d ""{app}"""
 
 [Run]
-Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service install"; Description: "Install and start the ASVP Agent Windows service"; Flags: postinstall skipifsilent waituntilterminated
+Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service install"; Description: "Install and start the ASVP Agent Windows service"; Flags: postinstall waituntilterminated; Check: ShouldInstallService
 
 [Code]
 var
   EnrollmentPage: TInputQueryWizardPage;
   EnrollmentSaved: Boolean;
+  BakedEnrollment: Boolean;
 
 function IsDigits(const Value: String): Boolean;
 var
@@ -109,7 +113,18 @@ begin
 end;
 
 procedure InitializeWizard();
+var
+  ConfigContents, LowerConfig: String;
 begin
+  BakedEnrollment := False;
+  if LoadStringFromFile(ExpandConstant('{#MyConfig}'), ConfigContents) then
+  begin
+    LowerConfig := Lowercase(ConfigContents);
+    BakedEnrollment := (Pos('management.example.invalid', LowerConfig) = 0) and
+      ((Pos('"url": "https://', LowerConfig) > 0) or
+       (Pos('"url": "http://127.0.0.1', LowerConfig) > 0) or
+       (Pos('"url": "http://localhost', LowerConfig) > 0));
+  end;
   EnrollmentPage := CreateInputQueryPage(wpSelectDir,
     'Enroll ASVP Agent',
     'Connect this installation to its management server',
@@ -117,6 +132,16 @@ begin
   EnrollmentPage.Add('Management server URL:', False);
   EnrollmentPage.Add('Enrollment token (optional):', True);
   EnrollmentPage.Values[0] := 'https://';
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := BakedEnrollment and (PageID = EnrollmentPage.ID);
+end;
+
+function ShouldInstallService(): Boolean;
+begin
+  Result := BakedEnrollment or EnrollmentSaved;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -147,7 +172,7 @@ var
   InputPath: String;
   EnrollmentSucceeded: Boolean;
 begin
-  if (CurStep = ssPostInstall) and not EnrollmentSaved then
+  if (CurStep = ssPostInstall) and not BakedEnrollment and not EnrollmentSaved then
   begin
     InputPath := ExpandConstant('{tmp}\asvp-enrollment.txt');
     if not SaveStringToFile(InputPath, Trim(EnrollmentPage.Values[0]) + #13#10 +

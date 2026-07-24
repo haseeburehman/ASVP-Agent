@@ -11,7 +11,7 @@ function abortedError() {
   return error;
 }
 
-function runCommand(executable, args, { signal, timeoutMs = 3000, spawnProcess = spawn } = {}) {
+function runCommand(executable, args, { signal, timeoutMs = 15000, spawnProcess = spawn } = {}) {
   if (signal?.aborted) return Promise.reject(abortedError());
 
   return new Promise((resolve, reject) => {
@@ -150,7 +150,7 @@ async function collectMacOsPatches({ signal, commandTimeoutMs, run }) {
 export async function collectInstalledPatches(platform, options = {}) {
   const dependencies = {
     signal: options.signal,
-    commandTimeoutMs: options.commandTimeoutMs ?? 3000,
+    commandTimeoutMs: options.commandTimeoutMs ?? 15000,
     readTextFile: options.readTextFile ?? readFile,
     run: options.runCommand ?? runCommand,
   };
@@ -192,7 +192,10 @@ export function createOsInfoCollector({
       const platform = normalizePlatform(osData.platform);
       let patches;
       try {
-        patches = await patchChecker(platform, { signal: context.signal });
+        patches = await patchChecker(platform, {
+                  signal: context.signal,
+                  commandTimeoutMs: context.collectorConfig?.patchCheckTimeoutMs ?? 15000,
+                });
       } catch (error) {
         if (error.name === 'AbortError') throw error;
         patches = patchResult(null, null, `Patch sub-check failed: ${error.message}`);

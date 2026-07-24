@@ -8,7 +8,7 @@ const builtInDefinitions = {
   'os-info': {
     modulePath: '../collectors/os-info/index.js',
     implemented: true,
-    timeoutMs: 10000,
+    timeoutMs: 25000,
     concurrency: 1,
   },
   apps: {
@@ -44,7 +44,7 @@ const builtInDefinitions = {
   'compliance-checks': {
     modulePath: '../collectors/compliance-checks/index.js',
     implemented: true,
-    timeoutMs: 30000,
+    timeoutMs: 45000,
     concurrency: 1,
   },
   'users-groups': {
