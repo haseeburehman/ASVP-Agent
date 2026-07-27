@@ -29,9 +29,19 @@ export async function validateScaScanPaths(scanPaths, {
   resolveRealPath = realpath,
 } = {}) {
   if (!Array.isArray(scanPaths)) return;
-  const home = normalize(homeDirectory, pathApi);
-  const identityDirectory = identityPath ? normalize(pathApi.dirname(pathApi.resolve(cwd, identityPath)), pathApi) : null;
-  const personalDirectories = PERSONAL_DIRECTORIES.map((name) => normalize(pathApi.join(homeDirectory, name), pathApi));
+  const canonicalizePolicyDirectory = async (directory) => {
+    try {
+      return await resolveRealPath(pathApi.resolve(directory));
+    } catch {
+      return pathApi.resolve(directory);
+    }
+  };
+  const canonicalHomeDirectory = await canonicalizePolicyDirectory(homeDirectory);
+  const home = normalize(canonicalHomeDirectory, pathApi);
+  const identityDirectory = identityPath
+    ? normalize(await canonicalizePolicyDirectory(pathApi.dirname(pathApi.resolve(cwd, identityPath))), pathApi)
+    : null;
+  const personalDirectories = PERSONAL_DIRECTORIES.map((name) => normalize(pathApi.join(canonicalHomeDirectory, name), pathApi));
   const personalNames = new Set(PERSONAL_DIRECTORIES.map((name) => process.platform === 'win32' ? name.toLowerCase() : name));
   const credentialNames = new Set(CREDENTIAL_DIRECTORY_NAMES.map((name) => process.platform === 'win32' ? name.toLowerCase() : name));
 

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { loadConfig } from '../../src/config/loader.js';
+import { validateScaScanPaths } from '../../src/security/sca-scan-paths.js';
 
 async function withTempDirectory(callback) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-config-'));
@@ -102,6 +103,20 @@ test('rejects broad or sensitive SCA scan roots during config validation', async
       );
     }
   });
+});
+
+test('rejects a Windows home root when realpath returns a canonical alias', async () => {
+  const lexicalHome = 'C:\\Users\\runneradmin';
+  const canonicalHome = 'C:\\Users\\RUNNER~1';
+  await assert.rejects(
+    validateScaScanPaths([lexicalHome], {
+      cwd: 'D:\\a\\ASVP-Agent',
+      homeDirectory: lexicalHome,
+      pathApi: path.win32,
+      resolveRealPath: async (value) => value === lexicalHome ? canonicalHome : value,
+    }),
+    /SCA scan path.*is forbidden: the current user home directory is not allowed/,
+  );
 });
 
 test('rejects a configured symlink root resolving to the user home directory', async () => {
