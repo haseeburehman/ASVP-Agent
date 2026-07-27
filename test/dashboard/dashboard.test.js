@@ -25,17 +25,7 @@ function testConfig(directory) {
     collectors: {
       upload: { intervalMs: 60000, uploadConcurrency: 1, maxPayloadWarningBytes: 1_000_000 },
       'os-info': { timeoutMs: 25000, concurrency: 1, patchCheckTimeoutMs: 15000 },
-      'network-scan': {
-        allowedCidrs: [], maxCidrSize: 16, allowWideRanges: false, timeoutMs: 1000, concurrency: 1,
-        maxConcurrentTargets: 1, maxConcurrentPortsPerHost: 1, maxPortsPerHost: 10,
-        perHostDelayMs: 0, perPortTimeoutMs: 50, bannerTimeoutMs: 50, maxBannerBytes: 128,
-        maxScanOperationsPerTask: 10,
-      },
-      'tls-checks': {
-        allowedCidrs: [], maxCidrSize: 16, allowWideRanges: false, timeoutMs: 1000, concurrency: 1,
-        maxConcurrentTargets: 1, maxPortsPerHost: 10, perHostDelayMs: 0, perHandshakeTimeoutMs: 50,
-        nmapTimeoutMs: 50, expiryWarningDays: 30, maxScanOperationsPerTask: 10,
-      },
+
       'sca-deps': { timeoutMs: 1000, concurrency: 1, scanPaths: [], maxDepth: 1, maxManifests: 1 },
     },
   };
@@ -68,6 +58,29 @@ test('dashboard is disabled in the default configuration and is not part of Agen
   assert.equal(config.dashboard.enabled, false);
   const lifecycleSource = await import('node:fs/promises').then(({ readFile }) => readFile(new URL('../../src/agent/lifecycle.js', import.meta.url), 'utf8'));
   assert.doesNotMatch(lifecycleSource, /DashboardServer|dashboard\/server/);
+});
+
+test('dashboard refuses non-loopback binding before creating a listener', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-dashboard-bind-'));
+  const errors = [];
+  const config = testConfig(directory);
+  config.dashboard.bindAddress = '0.0.0.0';
+  const dashboard = new DashboardServer({
+    config,
+    logger: { ...logger, error(context, message) { errors.push({ context, message }); } },
+    version: 'test',
+    cwd: directory,
+  });
+  try {
+    await assert.rejects(
+      dashboard.start({ startAgent: false }),
+      /Dashboard bindAddress must be loopback-only.*received 0\.0\.0\.0/,
+    );
+    assert.equal(dashboard.httpServer, undefined);
+    assert.equal(errors[0].message, 'Refusing to start dashboard on a non-loopback address');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('HTTP page and WebSocket both require the local dashboard token', async () => {
@@ -170,20 +183,3 @@ test('one-shot connection test reports success and unreachable states', async ()
   });
 });
 
-test('dashboard and CLI manual paths deny the same unauthorized network target before scanning', async () => {
-  await withDashboard(async (dashboard) => {
-    let directError;
-    try {
-      await runManualScan({
-        collectorName: 'network-scan', targets: ['192.0.2.10'], ports: [443], queue: false,
-        config: dashboard.config, logger, cwd: dashboard.cwd,
-      });
-    } catch (error) {
-      directError = error;
-    }
-    await assert.rejects(
-      dashboard.executeOperatorCommand('scan network-scan --target 192.0.2.10 --ports 443', new AbortController().signal),
-      (error) => error.code === 'AUTHORIZATION_DENIED' && error.message === directError.message,
-    );
-  });
-});

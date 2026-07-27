@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import dotenv from 'dotenv';
 import { configSchema } from './schema.js';
+import { validateScaScanPaths } from '../security/sca-scan-paths.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const defaultConfigPath = path.join(projectRoot, 'config', 'default.json');
@@ -21,12 +22,15 @@ const envMappings = {
   ASVP_REQUEST_TIMEOUT_MS: ['server', 'requestTimeoutMs', Number],
   ASVP_HEARTBEAT_INTERVAL_MS: ['agent', 'heartbeatIntervalMs', Number],
   ASVP_POLL_INTERVAL_MS: ['agent', 'pollIntervalMs', Number],
+
   ASVP_LOG_LEVEL: ['agent', 'logLevel', String],
   ASVP_DASHBOARD_ENABLED: ['dashboard', 'enabled', (value) => value === 'true'],
   ASVP_DASHBOARD_PORT: ['dashboard', 'port', Number],
   ASVP_DASHBOARD_BIND_ADDRESS: ['dashboard', 'bindAddress', String],
   ASVP_IDENTITY_PATH: ['storage', 'identityPath', String],
   ASVP_STATUS_PATH: ['storage', 'statusPath', String],
+  ASVP_TASK_REPLAY_LEDGER_PATH: ['storage', 'taskReplayLedgerPath', String],
+  ASVP_TASK_JOURNAL_PATH: ['storage', 'taskJournalPath', String],
   ASVP_QUEUE_DIR: ['storage', 'queueDir', String],
   ASVP_MAX_QUEUE_SIZE_BYTES: ['storage', 'maxQueueSizeBytes', Number],
   ASVP_MAX_QUEUE_ITEMS: ['storage', 'maxQueueItems', Number],
@@ -97,6 +101,11 @@ export async function loadConfig(options = {}) {
   if (config.retry.maximumDelayMs < config.retry.initialDelayMs) {
     throw new Error('Invalid agent configuration: /retry/maximumDelayMs must be greater than or equal to initialDelayMs');
   }
+  await validateScaScanPaths(config.collectors['sca-deps']?.scanPaths, {
+    cwd,
+    identityPath: config.storage.identityPath,
+  });
+  config.collectors['sca-deps'].identityPath = config.storage.identityPath;
   for (const [name, innerKey] of [['os-info', 'patchCheckTimeoutMs'], ['compliance-checks', 'commandTimeoutMs']]) {
     const collector = config.collectors[name];
     if (collector?.[innerKey] >= collector?.timeoutMs) {

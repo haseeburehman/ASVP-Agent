@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { executeCollector } from '../../src/core/collector.js';
-import usersGroupsCollector, { createUsersGroupsCollector } from '../../src/collectors/users-groups/index.js';
+import usersGroupsCollector, { createUsersGroupsCollector, parsePasswdStatus } from '../../src/collectors/users-groups/index.js';
 
 function fileMock(files) {
   return async (filePath) => {
@@ -12,46 +12,74 @@ function fileMock(files) {
   };
 }
 
-test('Linux adapter parses passwd and group while tolerating unreadable shadow', async () => {
-  const permissionError = new Error('permission denied');
-  permissionError.code = 'EACCES';
+test('Linux adapter parses passwd and group while tolerating unavailable passwd status', async () => {
+  const calls = [];
   const collector = createUsersGroupsCollector({
     platform: 'linux',
     readTextFile: fileMock({
       '/etc/passwd': 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000:Alice:/home/alice:/bin/sh',
       '/etc/group': 'root:x:0:\nusers:x:1000:alice,bob',
-      '/etc/shadow': permissionError,
     }),
+    runCommand: async (executable, args) => {
+      calls.push([executable, args]);
+      throw new Error('permission denied');
+    },
   });
 
   const data = await collector.run();
 
+  assert.deepEqual(calls, [['passwd', ['-S', 'root']], ['passwd', ['-S', 'alice']]]);
   assert.equal(data.platform, 'linux');
   assert.equal(data.users.items[1].name, 'alice');
   assert.equal(data.users.items[1].uid, 1000);
   assert.equal(data.users.items[1].primaryGroupId, 1000);
   assert.equal(data.users.items[1].enabled, null);
+  assert.equal(data.users.accountStatus, 'insufficient_privilege');
+  assert.equal(data.users.reasonCode, 'insufficient_privilege');
   assert.match(data.users.reason, /permission denied/);
   assert.deepEqual(data.groups.items[1], { name: 'users', gid: 1000, members: ['alice', 'bob'] });
 });
 
-test('Linux adapter derives password lock state when shadow is readable', async () => {
+test('Linux adapter derives lock and expiry state from passwd status without credential files', async () => {
+  const filesRead = [];
   const collector = createUsersGroupsCollector({
     platform: 'linux',
-    readTextFile: fileMock({
-      '/etc/passwd': 'locked:x:1000:1000::/home/locked:/bin/sh\nactive:x:1001:1001::/home/active:/bin/sh',
-      '/etc/group': '',
-      '/etc/shadow': 'locked:!:20000:0:99999:7:::\nactive:$6$hash:20000:0:99999:7:::',
-    }),
+    readTextFile: async (filePath) => {
+      filesRead.push(filePath);
+      if (filePath === '/etc/passwd') return 'locked:x:1000:1000::/home/locked:/bin/sh\nactive:x:1001:1001::/home/active:/bin/sh';
+      if (filePath === '/etc/group') return '';
+      throw new Error(`Unexpected file: ${filePath}`);
+    },
+    runCommand: async (executable, args) => {
+      assert.equal(executable, 'passwd');
+      assert.deepEqual(args.slice(0, 1), ['-S']);
+      return args[1] === 'locked'
+        ? 'locked L 2026-01-01 0 99999 7 -1'
+        : 'active P 2026-01-01 0 90 7 -1';
+    },
   });
 
   const data = await collector.run();
 
+  assert.deepEqual(filesRead, ['/etc/passwd', '/etc/group']);
   assert.equal(data.users.items[0].passwordLocked, true);
   assert.equal(data.users.items[0].enabled, false);
+  assert.equal(data.users.items[0].passwordNeverExpires, true);
   assert.equal(data.users.items[1].passwordLocked, false);
   assert.equal(data.users.items[1].enabled, true);
+  assert.equal(data.users.items[1].passwordNeverExpires, false);
+  assert.equal(data.users.accountStatus, 'available');
+  assert.equal(data.users.reasonCode, null);
   assert.equal(data.users.reason, null);
+});
+
+test('passwd status parser consumes only non-secret account-state fields', () => {
+  assert.deepEqual(parsePasswdStatus('alice P 2026-01-01 0 90 7 -1'), {
+    name: 'alice', locked: false, enabled: true, neverExpires: false,
+  });
+  assert.deepEqual(parsePasswdStatus('service L 2026-01-01 0 99999 7 -1'), {
+    name: 'service', locked: true, enabled: false, neverExpires: true,
+  });
 });
 
 test('Windows adapter uses one fixed non-interactive PowerShell script', async () => {

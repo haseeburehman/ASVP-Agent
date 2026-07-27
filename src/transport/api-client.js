@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { generateEncryptionKey } from '../security/crypto.js';
+import { deriveMachineFingerprint } from '../security/machine-fingerprint.js';
 
 export class ManagementHttpError extends Error {
-  constructor(status, message = `Management server returned HTTP ${status}`) {
+  constructor(status, message = `Management server returned HTTP ${status}`, serverCode) {
     super(message);
     this.name = 'ManagementHttpError';
-    this.code = 'MANAGEMENT_HTTP_ERROR';
+    this.code = serverCode ?? 'MANAGEMENT_HTTP_ERROR';
     this.status = status;
   }
 }
@@ -19,12 +20,6 @@ export class MockManagementTransport {
         params: { source: 'mock-management-transport' },
         scheduledAt: '2026-01-01T00:00:00.000Z',
       },
-      {
-        taskId: 'mock-task-network-scan-001',
-        collectorName: 'network-scan',
-        params: {},
-        scheduledAt: '2026-01-01T00:00:01.000Z',
-      },
     ];
     this.delivered = false;
     this.uploadHandler = uploadHandler;
@@ -34,8 +29,11 @@ export class MockManagementTransport {
   async register() {
     return {
       agentId: `mock-agent-${randomUUID()}`,
+      tenantId: 'default',
       authToken: `mock-token-${randomUUID()}`,
       encryptionKey: generateEncryptionKey(),
+      taskSigningKey: generateEncryptionKey(),
+      taskSigningKeyId: `mock-task-key-${randomUUID()}`,
     };
   }
 
@@ -74,8 +72,9 @@ export class FetchManagementTransport {
         ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
         : AbortSignal.timeout(this.requestTimeoutMs),
     });
-    if (!response.ok) throw new ManagementHttpError(response.status);
-    return response.json();
+    const responseBody = await response.json().catch(() => null);
+    if (!response.ok) throw new ManagementHttpError(response.status, responseBody?.error, responseBody?.code);
+    return responseBody;
   }
 
   register(pathname, payload, previousAuthToken) {
@@ -100,8 +99,9 @@ export class FetchManagementTransport {
 }
 
 export class ApiClient {
-  constructor({ config, transport }) {
+  constructor({ config, transport, fingerprintProvider = deriveMachineFingerprint }) {
     this.config = config;
+    this.fingerprintProvider = fingerprintProvider;
     this.transport = transport ?? (config.server.mode === 'mock'
       ? new MockManagementTransport()
       : new FetchManagementTransport({
@@ -110,36 +110,41 @@ export class ApiClient {
       }));
   }
 
-  register(metadata = {}, previousAuthToken) {
-    return this.transport.register(this.config.server.registrationPath, metadata, previousAuthToken);
+  async register(metadata = {}, previousAuthToken) {
+    const machineFingerprint = await this.fingerprintProvider();
+    return this.transport.register(this.config.server.registrationPath, { ...metadata, machineFingerprint }, previousAuthToken);
   }
 
-  sendHeartbeat(identity, status) {
-    return this.transport.heartbeat(this.config.server.heartbeatPath, status, identity.authToken);
+  async sendHeartbeat(identity, status) {
+    const machineFingerprint = await this.fingerprintProvider();
+    return this.transport.heartbeat(this.config.server.heartbeatPath, { ...status, machineFingerprint }, identity.authToken);
   }
 
-  deregister(identity) {
-    if (this.config.server.mode === 'mock') return Promise.resolve({ accepted: true, deregisteredAt: new Date().toISOString() });
+  async deregister(identity) {
+    if (this.config.server.mode === 'mock') return { accepted: true, deregisteredAt: new Date().toISOString() };
+    const machineFingerprint = await this.fingerprintProvider();
     return this.transport.deregister(
       this.config.server.deregistrationPath,
-      { agentId: identity.agentId },
+      { agentId: identity.agentId, machineFingerprint },
       identity.authToken,
     );
   }
 
-  uploadResult(identity, payload, { signal } = {}) {
+  async uploadResult(identity, payload, { signal } = {}) {
+    const machineFingerprint = await this.fingerprintProvider();
     return this.transport.uploadResult(
       this.config.server.resultsPath,
-      payload,
+      { ...payload, machineFingerprint },
       identity.authToken,
       signal,
     );
   }
 
   async pollTasks(identity) {
+    const machineFingerprint = await this.fingerprintProvider();
     const response = await this.transport.pollTasks(
       this.config.server.tasksPath,
-      { agentId: identity.agentId },
+      { agentId: identity.agentId, machineFingerprint },
       identity.authToken,
     );
     const tasks = Array.isArray(response) ? response : response?.tasks;
@@ -150,12 +155,13 @@ export class ApiClient {
 
 export async function loadOrRegisterIdentity({ credentialStore, apiClient, force = false, metadata = {}, validateExisting }) {
   const existing = await credentialStore.loadIdentity();
-  if (!force && existing?.agentId && existing?.authToken && existing?.encryptionKey) {
+  if (!force && existing?.agentId && existing?.tenantId && existing?.authToken && existing?.encryptionKey && existing?.taskSigningKey && existing?.taskSigningKeyId) {
     if (typeof validateExisting !== 'function') return { identity: existing, registered: false };
     try {
       await validateExisting(existing);
       return { identity: existing, registered: false };
     } catch (error) {
+      if (error?.code === 'IDENTITY_FINGERPRINT_MISMATCH') throw error;
       if (![401, 403].includes(Number(error?.status))) {
         return { identity: existing, registered: false, validationError: error };
       }
@@ -166,8 +172,8 @@ export async function loadOrRegisterIdentity({ credentialStore, apiClient, force
     ? { ...metadata, previousAgentId: existing.agentId }
     : metadata;
   const identity = await apiClient.register(registrationMetadata, existing?.authToken);
-  if (!identity?.agentId || !identity?.authToken || !identity?.encryptionKey) {
-    throw new Error('Registration response did not include agentId, authToken, and encryptionKey');
+  if (!identity?.agentId || !identity?.tenantId || !identity?.authToken || !identity?.encryptionKey || !identity?.taskSigningKey || !identity?.taskSigningKeyId) {
+    throw new Error('Registration response did not include agentId, tenantId, authToken, encryptionKey, taskSigningKey, and taskSigningKeyId');
   }
   await credentialStore.saveIdentity(identity);
   return { identity, registered: true };

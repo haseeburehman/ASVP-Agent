@@ -18,6 +18,7 @@ async function createHarness(uploadHandler) {
     maxQueueItems: 100,
     maxItemAgeMs: 60_000,
     logger,
+    encryptionKey: generateEncryptionKey(),
   }).initialize();
   const transport = new MockManagementTransport({ tasks: [], uploadHandler });
   const apiClient = new ApiClient({

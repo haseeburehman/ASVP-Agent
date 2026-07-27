@@ -5,12 +5,22 @@ import express from 'express';
 import { decodeResultEnvelope, generateAgentSecrets, hashToken } from './crypto.js';
 import { createDashboardSessions } from './dashboard-session.js';
 import { computeFleetStatus } from './fleet-status.js';
+import { canonicalizeTaskParams, deriveTaskSigningKey, signTaskEnvelope } from '../../src/security/task-envelope.js';
 
 const dashboardRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', 'dashboard');
 export const BASELINE_COLLECTORS = Object.freeze(['os-info', 'apps', 'compliance-checks', 'users-groups', 'antivirus-status']);
-function httpError(status, message) { const error = new Error(message); error.status = status; return error; }
+function httpError(status, message, code) { const error = new Error(message); error.status = status; error.code = code; return error; }
 function requireString(value, name) { if (typeof value !== 'string' || !value.trim()) throw httpError(400, `${name} must be a non-empty string`); return value.trim(); }
 function requireObject(value, name) { if (!value || typeof value !== 'object' || Array.isArray(value)) throw httpError(400, `${name} must be an object`); return value; }
+function requireMachineFingerprint(value) {
+  const fingerprint = requireString(value, 'machineFingerprint');
+  if (!/^[a-f0-9]{64}$/i.test(fingerprint)) throw httpError(400, 'machineFingerprint must be a SHA-256 hex string');
+  return fingerprint.toLowerCase();
+}
+function fingerprintsMatch(expected, supplied) {
+  return typeof expected === 'string' && /^[a-f0-9]{64}$/i.test(expected)
+    && timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(supplied, 'hex'));
+}
 function tokenMatches(expected, supplied) {
   if (typeof supplied !== 'string') return false;
   return timingSafeEqual(createHash('sha256').update(expected).digest(), createHash('sha256').update(supplied).digest());
@@ -53,8 +63,9 @@ function parseJson(value, fallback) { try { return JSON.parse(value); } catch { 
 export function createApp({
   database,
   adminToken,
+  taskSigningSecret,
+  taskSigningKeyId = 'v1',
   adminRateLimit = { maxRequests: 60, windowMs: 60000 },
-  requireEnrollmentToken = false,
   expectedHeartbeatIntervalMs = 30000,
   secureDashboardCookie = false,
   baselineRescanIntervalMs = 24 * 60 * 60 * 1000,
@@ -66,6 +77,8 @@ export function createApp({
   rateNow = () => Date.now(),
 }) {
   if (typeof adminToken !== 'string' || !adminToken) throw new Error('createApp requires a non-empty adminToken');
+  if (typeof taskSigningSecret !== 'string' || !taskSigningSecret) throw new Error('createApp requires a non-empty taskSigningSecret');
+  if (typeof taskSigningKeyId !== 'string' || !taskSigningKeyId) throw new Error('createApp requires a non-empty taskSigningKeyId');
   const app = express();
   const authenticate = createAuthenticator(database);
   if (!Number.isInteger(baselineRescanIntervalMs) || baselineRescanIntervalMs < 60000) throw new Error('baselineRescanIntervalMs must be at least 60000');
@@ -76,62 +89,101 @@ export function createApp({
   app.use(express.json({ limit: '25mb' }));
   app.use('/api/admin', limiter, createAdminAuthenticator(adminToken));
 
-  const insertAgent = database.prepare(`INSERT INTO agents (id, hostname, auth_token_hash, encryption_key, registered_at, last_heartbeat_at, status, platform, architecture, last_poll_at, agent_version, deregistered_at) VALUES (?, ?, ?, ?, ?, NULL, 'registered', ?, ?, NULL, ?, NULL)`);
-  const findRegistrationAgent = database.prepare('SELECT id, auth_token_hash FROM agents WHERE id = ?');
-  const rotateAgentCredentials = database.prepare(`UPDATE agents SET hostname = COALESCE(?, hostname), platform = COALESCE(?, platform), architecture = COALESCE(?, architecture), agent_version = COALESCE(?, agent_version), auth_token_hash = ?, encryption_key = ?, last_heartbeat_at = NULL, last_poll_at = NULL, deregistered_at = NULL, status = 'registered' WHERE id = ?`);
-  const updateHeartbeat = database.prepare(`UPDATE agents SET hostname = ?, last_heartbeat_at = ?, agent_version = COALESCE(?, agent_version), deregistered_at = NULL, status = 'online' WHERE id = ?`);
-  const deregisterAgent = database.prepare(`UPDATE agents SET status = 'deregistered', deregistered_at = ? WHERE id = ?`);
-  const updatePoll = database.prepare('UPDATE agents SET last_poll_at = ? WHERE id = ?');
-  const insertEvent = database.prepare('INSERT INTO agent_events (agent_id, event_type, details, created_at) VALUES (?, ?, ?, ?)');
-  const event = (agentId, type, details, timestamp = now().toISOString()) => insertEvent.run(agentId, type, JSON.stringify(details), timestamp);
-  const selectTasks = database.prepare(`SELECT * FROM tasks WHERE status = 'pending' AND (agent_id = ? OR agent_id IS NULL) ORDER BY created_at, id`);
-  const dispatchTask = database.prepare(`UPDATE tasks SET status = 'dispatched', agent_id = ?, dispatched_at = ? WHERE id = ? AND status = 'pending'`);
-  const dispatchPending = database.transaction((agentId, timestamp) => {
+  const insertAgent = database.prepare(`INSERT INTO agents (id, tenant_id, hostname, auth_token_hash, encryption_key, registered_at, last_heartbeat_at, status, platform, architecture, last_poll_at, agent_version, deregistered_at, machine_fingerprint) VALUES (?, ?, ?, ?, ?, ?, NULL, 'registered', ?, ?, NULL, ?, NULL, ?)`);
+  const findRegistrationAgent = database.prepare('SELECT id, tenant_id, auth_token_hash, encryption_key, machine_fingerprint FROM agents WHERE id = ?');
+  const rotateAgentCredentials = database.prepare(`UPDATE agents SET hostname = COALESCE(?, hostname), platform = COALESCE(?, platform), architecture = COALESCE(?, architecture), agent_version = COALESCE(?, agent_version), auth_token_hash = ?, machine_fingerprint = COALESCE(machine_fingerprint, ?), last_heartbeat_at = NULL, last_poll_at = NULL, deregistered_at = NULL, status = 'registered' WHERE id = ? AND tenant_id = ?`);
+  const updateHeartbeat = database.prepare(`UPDATE agents SET hostname = ?, last_heartbeat_at = ?, agent_version = COALESCE(?, agent_version), deregistered_at = NULL, status = 'online' WHERE id = ? AND tenant_id = ?`);
+  const deregisterAgent = database.prepare(`UPDATE agents SET status = 'deregistered', deregistered_at = ? WHERE id = ? AND tenant_id = ?`);
+  const updatePoll = database.prepare('UPDATE agents SET last_poll_at = ? WHERE id = ? AND tenant_id = ?');
+  const findTaskSequence = database.prepare('SELECT task_sequence FROM agents WHERE id = ? AND tenant_id = ?');
+  const updateTaskSequence = database.prepare('UPDATE agents SET task_sequence = ? WHERE id = ? AND tenant_id = ?');
+  const insertEvent = database.prepare('INSERT INTO agent_events (tenant_id, agent_id, event_type, details, created_at) VALUES (?, ?, ?, ?, ?)');
+  const event = (tenantId, agentId, type, details, timestamp = now().toISOString()) => insertEvent.run(tenantId, agentId, type, JSON.stringify(details), timestamp);
+  const requireBoundFingerprint = (request, _response, next) => {
+    try {
+      const supplied = requireMachineFingerprint(requireObject(request.body, 'request body').machineFingerprint);
+      if (fingerprintsMatch(request.agent.machine_fingerprint, supplied)) return next();
+      const details = { route: request.path, method: request.method };
+      event(request.agent.tenant_id, request.agent.id, 'identity-fingerprint-mismatch', details);
+      logger.warn({ event: 'identity-fingerprint-mismatch', agentId: request.agent.id, tenantId: request.agent.tenant_id, ...details, message: 'Rejected authenticated agent request due to machine fingerprint mismatch' });
+      return next(httpError(403, 'Machine fingerprint does not match registered agent identity', 'IDENTITY_FINGERPRINT_MISMATCH'));
+    } catch (error) { return next(error); }
+  };
+  const selectTasks = database.prepare(`SELECT * FROM tasks WHERE tenant_id = ? AND status = 'pending' AND (agent_id = ? OR agent_id IS NULL) ORDER BY created_at, id`);
+  const dispatchTask = database.prepare(`UPDATE tasks SET status = 'dispatched', agent_id = ?, dispatched_at = ? WHERE id = ? AND tenant_id = ? AND status = 'pending'`);
+  const dispatchPending = database.transaction((tenantId, agentId, issuedAt) => {
     const dispatched = [];
-    for (const row of selectTasks.all(agentId)) if (dispatchTask.run(agentId, timestamp, row.id).changes === 1) dispatched.push(row);
+    let sequence = findTaskSequence.get(agentId, tenantId).task_sequence;
+    const signingKey = deriveTaskSigningKey(taskSigningSecret, agentId);
+    const expiresAt = new Date(new Date(issuedAt).getTime() + 10 * 60 * 1000).toISOString();
+    for (const row of selectTasks.all(tenantId, agentId)) {
+      if (dispatchTask.run(agentId, issuedAt, row.id, tenantId).changes !== 1) continue;
+      sequence += 1;
+      const envelope = {
+        taskId: row.id,
+        agentId,
+        tenantId,
+        collectorName: row.collector_name,
+        params: canonicalizeTaskParams(parseJson(row.params, {})),
+        issuedAt,
+        expiresAt,
+        sequence,
+        nonce: randomBytes(18).toString('base64url'),
+        keyId: taskSigningKeyId,
+      };
+      dispatched.push({ ...envelope, signature: signTaskEnvelope(envelope, signingKey) });
+    }
+    if (dispatched.length) updateTaskSequence.run(sequence, agentId, tenantId);
     return dispatched;
   });
-  const findResult = database.prepare('SELECT id FROM results WHERE id = ?');
-  const insertResult = database.prepare(`INSERT INTO results (id, agent_id, task_id, collector, status, raw_data, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-  const completeTask = database.prepare(`UPDATE tasks SET status = ? WHERE id = ? AND agent_id = ?`);
-  const findTask = database.prepare('SELECT id FROM tasks WHERE id = ? AND agent_id = ?');
-  const insertTask = database.prepare(`INSERT INTO tasks (id, agent_id, collector_name, params, status, created_at, dispatched_at) VALUES (?, ?, ?, ?, 'pending', ?, NULL)`);
-  const findAgentById = database.prepare('SELECT id FROM agents WHERE id = ?');
-  const findLatestBaselineTask = database.prepare('SELECT created_at FROM tasks WHERE agent_id = ? AND collector_name = ? ORDER BY created_at DESC LIMIT 1');
-  function enqueueBaseline(agentId, timestamp, force = false) {
+  const findResult = database.prepare('SELECT id FROM results WHERE id = ? AND tenant_id = ? AND agent_id = ?');
+  const insertResult = database.prepare(`INSERT INTO results (id, tenant_id, agent_id, task_id, collector, status, raw_data, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  const completeTask = database.prepare(`UPDATE tasks SET status = ? WHERE id = ? AND tenant_id = ? AND agent_id = ?`);
+  const findTask = database.prepare('SELECT id FROM tasks WHERE id = ? AND tenant_id = ? AND agent_id = ?');
+  const insertTask = database.prepare(`INSERT INTO tasks (id, tenant_id, agent_id, collector_name, params, status, created_at, dispatched_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)`);
+  const findAgentById = database.prepare('SELECT id, tenant_id FROM agents WHERE id = ?');
+  const findTenantById = database.prepare("SELECT id FROM tenants WHERE id = ? AND status = 'active'");
+  const findLatestBaselineTask = database.prepare('SELECT created_at FROM tasks WHERE tenant_id = ? AND agent_id = ? AND collector_name = ? ORDER BY created_at DESC LIMIT 1');
+  function enqueueBaseline(tenantId, agentId, timestamp, force = false) {
     const scheduled = [];
     for (const collectorName of baselineCollectors) {
-      const latest = findLatestBaselineTask.get(agentId, collectorName);
+      const latest = findLatestBaselineTask.get(tenantId, agentId, collectorName);
       const due = force || !latest || new Date(timestamp).getTime() - new Date(latest.created_at).getTime() >= baselineRescanIntervalMs;
       if (!due) continue;
       const taskId = randomUUID();
-      insertTask.run(taskId, agentId, collectorName, '{}', timestamp);
-      event(agentId, 'task-created', { taskId, collectorName, source: 'baseline' }, timestamp);
+      insertTask.run(taskId, tenantId, agentId, collectorName, '{}', timestamp);
+      event(tenantId, agentId, 'task-created', { taskId, collectorName, source: 'baseline' }, timestamp);
       scheduled.push({ taskId, collectorName });
     }
     return scheduled;
   }
-  const insertEnrollmentToken = database.prepare('INSERT INTO enrollment_tokens (token_hash, created_at, expires_at, max_uses, use_count) VALUES (?, ?, ?, ?, 0)');
-  const findUsableEnrollmentTokens = database.prepare(`SELECT token_hash FROM enrollment_tokens WHERE expires_at > ? AND (max_uses IS NULL OR use_count < max_uses)`);
-  const consumeEnrollmentToken = database.prepare(`UPDATE enrollment_tokens SET use_count = use_count + 1 WHERE token_hash = ? AND expires_at > ? AND (max_uses IS NULL OR use_count < max_uses)`);
-  function findEnrollmentTokenHash(suppliedToken, timestamp) {
+  const insertEnrollmentToken = database.prepare('INSERT INTO enrollment_tokens (token_hash, tenant_id, created_at, expires_at, max_uses, use_count) VALUES (?, ?, ?, ?, ?, 0)');
+  const findUsableEnrollmentTokens = database.prepare(`SELECT token_hash, tenant_id FROM enrollment_tokens WHERE expires_at > ? AND (max_uses IS NULL OR use_count < max_uses)`);
+  const consumeEnrollmentToken = database.prepare(`UPDATE enrollment_tokens SET use_count = use_count + 1 WHERE token_hash = ? AND tenant_id = ? AND expires_at > ? AND (max_uses IS NULL OR use_count < max_uses)`);
+  function findEnrollmentToken(suppliedToken, timestamp) {
     if (typeof suppliedToken !== 'string') return null;
     return findUsableEnrollmentTokens.all(timestamp)
-      .find((row) => storedTokenMatches(row.token_hash, suppliedToken))?.token_hash ?? null;
+      .find((row) => storedTokenMatches(row.token_hash, suppliedToken)) ?? null;
   }
 
-  const registerNew = database.transaction(({ hostname, platform, architecture, agentVersion, enrollmentToken }) => {
+  const registerNew = database.transaction(({ hostname, platform, architecture, agentVersion, enrollmentToken, machineFingerprint }) => {
     const timestamp = now().toISOString();
-    if (requireEnrollmentToken) {
-      const tokenHash = findEnrollmentTokenHash(enrollmentToken, timestamp);
-      if (!tokenHash || consumeEnrollmentToken.run(tokenHash, timestamp).changes !== 1) throw httpError(403, 'Valid enrollment token required');
-    }
+    const tokenRow = findEnrollmentToken(enrollmentToken, timestamp);
+    if (!tokenRow || consumeEnrollmentToken.run(tokenRow.token_hash, tokenRow.tenant_id, timestamp).changes !== 1) throw httpError(403, 'Valid enrollment token required');
+    const tenantId = tokenRow.tenant_id;
     const agentId = randomUUID();
     const secrets = generateAgentSecrets();
-    insertAgent.run(agentId, hostname, hashToken(secrets.authToken), secrets.encryptionKey, timestamp, platform, architecture, agentVersion);
-    event(agentId, 'register', { continuity: 'new-agent', hostname, platform, architecture }, timestamp);
-    const baselineTasks = enqueueBaseline(agentId, timestamp, true);
-    return { agentId, ...secrets, baselineTasks };
+    insertAgent.run(agentId, tenantId, hostname, hashToken(secrets.authToken), secrets.encryptionKey, timestamp, platform, architecture, agentVersion, machineFingerprint);
+    event(tenantId, agentId, 'register', { continuity: 'new-agent', hostname, platform, architecture }, timestamp);
+    const baselineTasks = enqueueBaseline(tenantId, agentId, timestamp, true);
+    return {
+      agentId,
+      tenantId,
+      ...secrets,
+      taskSigningKey: deriveTaskSigningKey(taskSigningSecret, agentId),
+      taskSigningKeyId,
+      baselineTasks,
+    };
   });
 
   app.post('/api/agents/register', (request, response, next) => {
@@ -141,18 +193,31 @@ export function createApp({
       const platform = body.platform == null ? null : requireString(body.platform, 'platform');
       const architecture = body.architecture == null ? null : requireString(body.architecture, 'architecture');
       const agentVersion = body.agentVersion == null ? null : requireString(body.agentVersion, 'agentVersion');
+      const machineFingerprint = requireMachineFingerprint(body.machineFingerprint);
       const previousAgentId = body.previousAgentId == null ? null : requireString(body.previousAgentId, 'previousAgentId');
       const knownPreviousAgent = previousAgentId ? findRegistrationAgent.get(previousAgentId) : null;
       const previousBearer = /^Bearer\s+(.+)$/i.exec(request.headers.authorization ?? '')?.[1];
       const continuityAuthorized = Boolean(knownPreviousAgent) && storedTokenMatches(knownPreviousAgent.auth_token_hash, previousBearer);
       let identity;
       if (continuityAuthorized) {
+        if (knownPreviousAgent.machine_fingerprint && !fingerprintsMatch(knownPreviousAgent.machine_fingerprint, machineFingerprint)) {
+          event(knownPreviousAgent.tenant_id, previousAgentId, 'identity-fingerprint-mismatch', { route: request.path, method: request.method, operation: 'continuity-registration' });
+          logger.warn({ event: 'identity-fingerprint-mismatch', agentId: previousAgentId, tenantId: knownPreviousAgent.tenant_id, route: request.path, method: request.method, operation: 'continuity-registration', message: 'Rejected continuity registration due to machine fingerprint mismatch' });
+          throw httpError(403, 'Machine fingerprint does not match registered agent identity', 'IDENTITY_FINGERPRINT_MISMATCH');
+        }
         const secrets = generateAgentSecrets();
-        rotateAgentCredentials.run(hostname, platform, architecture, agentVersion, hashToken(secrets.authToken), secrets.encryptionKey, previousAgentId);
-        event(previousAgentId, 'register', { continuity: 'reused-existing-agent', hostname, platform, architecture });
-        identity = { agentId: previousAgentId, ...secrets };
+        rotateAgentCredentials.run(hostname, platform, architecture, agentVersion, hashToken(secrets.authToken), machineFingerprint, previousAgentId, knownPreviousAgent.tenant_id);
+        event(knownPreviousAgent.tenant_id, previousAgentId, 'register', { continuity: 'reused-existing-agent', hostname, platform, architecture });
+        identity = {
+          agentId: previousAgentId,
+          tenantId: knownPreviousAgent.tenant_id,
+          authToken: secrets.authToken,
+          encryptionKey: knownPreviousAgent.encryption_key,
+          taskSigningKey: deriveTaskSigningKey(taskSigningSecret, previousAgentId),
+          taskSigningKeyId,
+        };
       } else {
-        identity = registerNew({ hostname, platform, architecture, agentVersion, enrollmentToken: body.enrollmentToken });
+        identity = registerNew({ hostname, platform, architecture, agentVersion, enrollmentToken: body.enrollmentToken, machineFingerprint });
       }
       const baselineTasks = identity.baselineTasks ?? [];
       delete identity.baselineTasks;
@@ -169,15 +234,15 @@ export function createApp({
       const agentId = requireString(body.agentId, 'agentId');
       if (agentId !== request.agent.id) throw httpError(403, 'Deregister agentId does not match bearer token');
       const timestamp = now().toISOString();
-      deregisterAgent.run(timestamp, agentId);
-      event(agentId, 'deregister', { reason: 'service-uninstall' }, timestamp);
+      deregisterAgent.run(timestamp, agentId, request.agent.tenant_id);
+      event(request.agent.tenant_id, agentId, 'deregister', { reason: 'service-uninstall' }, timestamp);
       knownFleetStates.set(agentId, 'deregistered');
       fleetHub.broadcast({ type: 'status-transition', agentId, from: computeFleetStatus(request.agent, { now: now(), expectedHeartbeatIntervalMs }).state, to: 'deregistered', occurredAt: timestamp });
       response.json({ accepted: true, deregisteredAt: timestamp });
     } catch (error) { next(error); }
   });
 
-  app.post('/api/agents/heartbeat', authenticate, (request, response, next) => {
+  app.post('/api/agents/heartbeat', authenticate, requireBoundFingerprint, (request, response, next) => {
     try {
       const body = requireObject(request.body, 'request body');
       const agentId = requireString(body.agentId, 'agentId');
@@ -185,8 +250,8 @@ export function createApp({
       const hostname = requireString(body.hostname, 'hostname');
       const timestamp = now().toISOString();
       const previousStatus = computeFleetStatus(request.agent, { now: now(), expectedHeartbeatIntervalMs }).state;
-      updateHeartbeat.run(hostname, timestamp, body.agentVersion ?? null, agentId);
-      event(agentId, 'heartbeat', { hostname, uptimeSeconds: body.uptimeSeconds ?? null, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null }, timestamp);
+      updateHeartbeat.run(hostname, timestamp, body.agentVersion ?? null, agentId, request.agent.tenant_id);
+      event(request.agent.tenant_id, agentId, 'heartbeat', { hostname, uptimeSeconds: body.uptimeSeconds ?? null, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null }, timestamp);
       fleetHub.broadcast({ type: 'heartbeat', agentId, hostname, receivedAt: timestamp, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null });
       if (previousStatus !== 'online') fleetHub.broadcast({ type: 'status-transition', agentId, from: previousStatus, to: 'online', occurredAt: timestamp });
       knownFleetStates.set(agentId, 'online');
@@ -195,22 +260,23 @@ export function createApp({
     } catch (error) { next(error); }
   });
 
-  app.post('/api/agents/tasks/poll', authenticate, (request, response, next) => {
+  app.post('/api/agents/tasks/poll', authenticate, requireBoundFingerprint, (request, response, next) => {
     try {
       const body = requireObject(request.body, 'request body');
       const agentId = requireString(body.agentId, 'agentId');
       if (agentId !== request.agent.id) throw httpError(403, 'Task poll agentId does not match bearer token');
       const timestamp = now().toISOString();
-      updatePoll.run(timestamp, agentId);
-      const baselineTasks = enqueueBaseline(agentId, timestamp);
-      const tasks = dispatchPending(agentId, timestamp).map((task) => ({ taskId: task.id, collectorName: task.collector_name, params: JSON.parse(task.params), scheduledAt: task.created_at }));
-      event(agentId, 'poll', { taskCount: tasks.length, taskIds: tasks.map((task) => task.taskId) }, timestamp);
+      const tenantId = request.agent.tenant_id;
+      updatePoll.run(timestamp, agentId, tenantId);
+      const baselineTasks = enqueueBaseline(tenantId, agentId, timestamp);
+      const tasks = dispatchPending(tenantId, agentId, timestamp);
+      event(tenantId, agentId, 'poll', { taskCount: tasks.length, taskIds: tasks.map((task) => task.taskId) }, timestamp);
       logger.info({ event: 'poll', agentId, taskCount: tasks.length, taskIds: tasks.map((task) => task.taskId), baselineTaskCount: baselineTasks.length });
       response.json(tasks);
     } catch (error) { next(error); }
   });
 
-  app.post('/api/agents/results', authenticate, async (request, response, next) => {
+  app.post('/api/agents/results', authenticate, requireBoundFingerprint, async (request, response, next) => {
     try {
       const envelope = requireObject(request.body, 'request body');
       const queueItemId = requireString(envelope.queueItemId, 'queueItemId');
@@ -218,8 +284,9 @@ export function createApp({
       if (agentId !== request.agent.id) throw httpError(403, 'Result agentId does not match bearer token');
       if (envelope.schemaVersion !== 1) throw httpError(400, 'Unsupported result schemaVersion');
       for (const field of ['enqueuedAt', 'contentEncoding', 'encryption', 'iv', 'authTag', 'ciphertext']) requireString(envelope[field], field);
-      if (findResult.get(queueItemId)) {
-        event(agentId, 'result-duplicate', { queueItemId });
+      const tenantId = request.agent.tenant_id;
+      if (findResult.get(queueItemId, tenantId, agentId)) {
+        event(tenantId, agentId, 'result-duplicate', { queueItemId });
         response.json({ accepted: true, queueItemId }); return;
       }
       let decoded;
@@ -229,11 +296,11 @@ export function createApp({
       const collector = requireString(result.collector, 'result.collector');
       const status = requireString(result.status, 'result.status');
       const reportedTaskId = result.taskId ?? null;
-      const taskId = reportedTaskId && findTask.get(reportedTaskId, agentId) ? reportedTaskId : null;
+      const taskId = reportedTaskId && findTask.get(reportedTaskId, tenantId, agentId) ? reportedTaskId : null;
       const receivedAt = now().toISOString();
-      insertResult.run(queueItemId, agentId, taskId, collector, status, JSON.stringify(result), receivedAt);
-      if (taskId) completeTask.run(status === 'success' ? 'completed' : 'failed', taskId, agentId);
-      event(agentId, 'result', { queueItemId, taskId, reportedTaskId, collector, status }, receivedAt);
+      insertResult.run(queueItemId, tenantId, agentId, taskId, collector, status, JSON.stringify(result), receivedAt);
+      if (taskId) completeTask.run(status === 'success' ? 'completed' : 'failed', taskId, tenantId, agentId);
+      event(tenantId, agentId, 'result', { queueItemId, taskId, reportedTaskId, collector, status }, receivedAt);
       const data = result.data && typeof result.data === 'object' ? result.data : null;
       fleetHub.broadcast({
         type: 'result-received',
@@ -259,11 +326,17 @@ export function createApp({
       const collectorName = requireString(body.collectorName, 'collectorName');
       const params = body.params == null ? {} : requireObject(body.params, 'params');
       const agentId = body.agentId == null ? null : requireString(body.agentId, 'agentId');
-      if (agentId && !findAgentById.get(agentId)) throw httpError(404, `Agent not found: ${agentId}`);
+      const suppliedTenantId = body.tenantId == null ? null : requireString(body.tenantId, 'tenantId');
+      const targetAgent = agentId ? findAgentById.get(agentId) : null;
+      if (agentId && !targetAgent) throw httpError(404, `Agent not found: ${agentId}`);
+      if (targetAgent && suppliedTenantId && suppliedTenantId !== targetAgent.tenant_id) throw httpError(400, 'tenantId does not match target agent tenant');
+      const tenantId = targetAgent?.tenant_id ?? suppliedTenantId;
+      if (!tenantId) throw httpError(400, 'tenantId is required for unassigned tasks');
+      if (!findTenantById.get(tenantId)) throw httpError(404, `Active tenant not found: ${tenantId}`);
       const taskId = randomUUID(); const timestamp = now().toISOString();
-      insertTask.run(taskId, agentId, collectorName, JSON.stringify(params), timestamp);
-      if (agentId) event(agentId, 'task-created', { taskId, collectorName }, timestamp);
-      response.status(201).json({ taskId });
+      insertTask.run(taskId, tenantId, agentId, collectorName, JSON.stringify(params), timestamp);
+      if (agentId) event(tenantId, agentId, 'task-created', { taskId, collectorName }, timestamp);
+      response.status(201).json({ taskId, tenantId });
     } catch (error) { next(error); }
   });
 
@@ -272,12 +345,14 @@ export function createApp({
       const body = request.body ?? {};
       const expiresInHours = body.expiresInHours ?? 24;
       const maxUses = body.maxUses ?? 1;
+      const tenantId = requireString(body.tenantId, 'tenantId');
+      if (!findTenantById.get(tenantId)) throw httpError(404, `Active tenant not found: ${tenantId}`);
       if (typeof expiresInHours !== 'number' || expiresInHours <= 0 || expiresInHours > 168) throw httpError(400, 'expiresInHours must be between 0 and 168');
       if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1)) throw httpError(400, 'maxUses must be a positive integer or null');
       const token = randomBytes(18).toString('base64url');
       const createdAt = now(); const expiresAt = new Date(createdAt.getTime() + expiresInHours * 3600000);
-      insertEnrollmentToken.run(hashToken(token), createdAt.toISOString(), expiresAt.toISOString(), maxUses);
-      response.status(201).json({ token, expiresAt: expiresAt.toISOString(), maxUses });
+      insertEnrollmentToken.run(hashToken(token), tenantId, createdAt.toISOString(), expiresAt.toISOString(), maxUses);
+      response.status(201).json({ token, tenantId, expiresAt: expiresAt.toISOString(), maxUses });
     } catch (error) { next(error); }
   });
 
@@ -336,7 +411,7 @@ export function createApp({
   app.use((error, _request, response, _next) => {
     const status = Number(error.status) || (error.type === 'entity.parse.failed' ? 400 : 500);
     if (status >= 500) logger.error({ event: 'server-error', error: error.message, stack: error.stack });
-    response.status(status).json({ error: error.message });
+    response.status(status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   });
   return app;
 }

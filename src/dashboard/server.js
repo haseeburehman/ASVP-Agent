@@ -41,7 +41,6 @@ async function atomicWriteConfig(filePath, config) {
 function editableConfig(config) {
   return {
     server: { mode: config.server.mode, url: config.server.url },
-    networkScanAllowedCidrs: config.collectors['network-scan'].allowedCidrs,
     scaDepsScanPaths: config.collectors['sca-deps'].scanPaths,
   };
 }
@@ -55,16 +54,12 @@ function applyEditableConfig(config, update) {
   if (update.server.mode === 'http' && !serverUrl.toLowerCase().startsWith('https://') && !localHttp) {
     throw new Error('HTTP transport requires HTTPS, except for a localhost/127.0.0.1 development server');
   }
-  if (!Array.isArray(update.networkScanAllowedCidrs) || !update.networkScanAllowedCidrs.every((value) => typeof value === 'string' && value.trim())) {
-    throw new Error('network-scan allowedCidrs must be an array of non-empty strings');
-  }
+
   if (!Array.isArray(update.scaDepsScanPaths) || !update.scaDepsScanPaths.every((value) => typeof value === 'string' && value.trim())) {
     throw new Error('sca-deps scanPaths must be an array of non-empty strings');
   }
   next.server.mode = update.server.mode;
   next.server.url = serverUrl;
-  next.collectors['network-scan'].allowedCidrs = update.networkScanAllowedCidrs.map((value) => value.trim());
-  next.collectors['tls-checks'].allowedCidrs = [...next.collectors['network-scan'].allowedCidrs];
   next.collectors['sca-deps'].scanPaths = update.scaDepsScanPaths.map((value) => value.trim());
   return next;
 }
@@ -95,6 +90,12 @@ export class DashboardServer {
   }
 
   async start({ startAgent = true } = {}) {
+    const bindAddress = this.config.dashboard.bindAddress;
+    if (!LOOPBACK_ADDRESSES.has(bindAddress)) {
+      const error = new Error(`Dashboard bindAddress must be loopback-only (127.0.0.1, ::1, or localhost); received ${bindAddress}`);
+      this.logger.error({ err: error, bindAddress }, 'Refusing to start dashboard on a non-loopback address');
+      throw error;
+    }
     const page = await readFile(PAGE_PATH, 'utf8');
     this.httpServer = createServer((request, response) => {
       if (!tokenMatches(this.token, requestToken(request))) {
@@ -134,9 +135,6 @@ export class DashboardServer {
 
     const address = this.httpServer.address();
     this.port = typeof address === 'object' ? address.port : this.config.dashboard.port;
-    if (!LOOPBACK_ADDRESSES.has(this.config.dashboard.bindAddress)) {
-      this.logger.warn({ bindAddress: this.config.dashboard.bindAddress, port: this.port }, 'SECURITY WARNING: dashboard is not bound to loopback and may expose full agent control to the network');
-    }
     this.logger.info({ bindAddress: this.config.dashboard.bindAddress, port: this.port }, 'Local agent dashboard started');
     if (startAgent) await this.startAgent().catch((error) => this.logger.error({ err: error }, 'Agent failed to start; dashboard remains available for configuration'));
     return this;
@@ -190,7 +188,6 @@ export class DashboardServer {
             : health.lastHeartbeatAt && health.lastPollAt
               ? 'connected'
               : 'connecting';
-    const networkAuthorized = (this.config.collectors['network-scan'].allowedCidrs ?? []).length > 0;
     return {
       ...health,
       agentVersion: this.version,
@@ -202,12 +199,7 @@ export class DashboardServer {
       uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
       collectors: this.registry.list()
         .filter((definition) => definition.implemented)
-        .map((definition) => ({
-          name: definition.name,
-          warning: ['network-scan', 'tls-checks'].includes(definition.name) && !networkAuthorized
-            ? 'No targets currently authorized; configure network-scan allowedCidrs first'
-            : null,
-        })),
+        .map((definition) => ({ name: definition.name, warning: null })),
       taskCreation: {
         enabled: this.config.server.mode === 'http',
         reason: this.config.server.mode === 'http' ? null : 'Task creation requires a real connected server',
@@ -286,19 +278,6 @@ export class DashboardServer {
     const definition = this.registry.getDefinition(collectorName);
     if (!definition?.implemented) throw new Error(`Unknown or unavailable collector "${collectorName}"`);
     const params = {};
-    if (['network-scan', 'tls-checks'].includes(collectorName)) {
-      if ((this.config.collectors['network-scan'].allowedCidrs ?? []).length === 0) {
-        throw new Error('No targets currently authorized; configure network-scan allowedCidrs first');
-      }
-      if (!Array.isArray(input.targets) || input.targets.length === 0) throw new Error(`${collectorName} requires at least one target`);
-      params.targets = input.targets;
-      if (input.ports != null) {
-        if (!Array.isArray(input.ports) || input.ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
-          throw new Error('ports must contain valid TCP port numbers');
-        }
-        params.ports = input.ports;
-      }
-    }
     const response = await this.fetchImpl(new URL('/api/admin/tasks', this.config.server.url), {
       method: 'POST',
       headers: {
@@ -387,8 +366,7 @@ export async function startDashboardCommand({ configPath } = {}) {
   const logger = createLogger({ level: config.agent.logLevel, onLog: (record) => dashboard?.pushLog(record) });
   dashboard = new DashboardServer({ config, logger, version, cwd });
   await dashboard.start({ startAgent: true });
-  const hostForUrl = config.dashboard.bindAddress === '0.0.0.0' ? '127.0.0.1' : config.dashboard.bindAddress;
-  const url = `http://${hostForUrl}:${dashboard.port}/?token=${encodeURIComponent(dashboard.token)}`;
+  const url = `http://${config.dashboard.bindAddress}:${dashboard.port}/?token=${encodeURIComponent(dashboard.token)}`;
   process.stdout.write(`\nASVP dashboard access URL (shown once):\n${url}\n\n`);
 
   const shutdown = async (signal) => {

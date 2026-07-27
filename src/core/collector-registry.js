@@ -29,16 +29,10 @@ const builtInDefinitions = {
     timeoutMs: 60000,
     concurrency: 1,
   },
-  'network-scan': {
-    modulePath: '../collectors/network-scan/index.js',
+  'local-ports': {
+    modulePath: '../collectors/local-ports/index.js',
     implemented: true,
-    timeoutMs: 120000,
-    concurrency: 1,
-  },
-  'tls-checks': {
-    modulePath: '../collectors/tls-checks/index.js',
-    implemented: true,
-    timeoutMs: 180000,
+    timeoutMs: 15000,
     concurrency: 1,
   },
   'compliance-checks': {
@@ -55,6 +49,24 @@ const builtInDefinitions = {
   },
   'antivirus-status': {
     modulePath: '../collectors/antivirus-status/index.js',
+    implemented: true,
+    timeoutMs: 20000,
+    concurrency: 1,
+  },
+  'process-summary': {
+    modulePath: '../collectors/process-summary/index.js',
+    implemented: true,
+    timeoutMs: 15000,
+    concurrency: 1,
+  },
+  'network-config': {
+    modulePath: '../collectors/network-config/index.js',
+    implemented: true,
+    timeoutMs: 15000,
+    concurrency: 1,
+  },
+  'disk-security': {
+    modulePath: '../collectors/disk-security/index.js',
     implemented: true,
     timeoutMs: 20000,
     concurrency: 1,

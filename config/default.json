@@ -14,7 +14,11 @@
   "agent": {
     "heartbeatIntervalMs": 30000,
     "pollIntervalMs": 10000,
-    "logLevel": "info"
+    "logLevel": "info",
+    "taskRateLimit": {
+      "maxExecutions": 30,
+      "windowMs": 300000
+    }
   },
   "dashboard": {
     "enabled": false,
@@ -24,6 +28,8 @@
   "storage": {
     "identityPath": "var/identity.json",
     "statusPath": "var/status.json",
+    "taskReplayLedgerPath": "var/task-replay-ledger.json",
+    "taskJournalPath": "var/task-journal.json",
     "queueDir": "var/queue",
     "maxQueueSizeBytes": 524288000,
     "maxQueueItems": 10000,
@@ -67,34 +73,9 @@
       "maxContainers": 20,
       "maxPackagesPerContainer": 500
     },
-    "network-scan": {
-      "allowedCidrs": [],
-      "maxCidrSize": 16,
-      "allowWideRanges": false,
-      "timeoutMs": 120000,
-      "concurrency": 1,
-      "maxConcurrentTargets": 5,
-      "maxConcurrentPortsPerHost": 50,
-      "maxPortsPerHost": 1000,
-      "perHostDelayMs": 100,
-      "perPortTimeoutMs": 1000,
-      "bannerTimeoutMs": 2000,
-      "maxBannerBytes": 1024,
-      "maxScanOperationsPerTask": 100000
-    },
-    "tls-checks": {
-      "allowedCidrs": [],
-      "maxCidrSize": 16,
-      "allowWideRanges": false,
-      "timeoutMs": 180000,
-      "concurrency": 1,
-      "maxConcurrentTargets": 5,
-      "maxPortsPerHost": 1000,
-      "perHostDelayMs": 100,
-      "perHandshakeTimeoutMs": 5000,
-      "nmapTimeoutMs": 15000,
-      "expiryWarningDays": 30,
-      "maxScanOperationsPerTask": 100000
+    "local-ports": {
+      "timeoutMs": 15000,
+      "concurrency": 1
     },
     "compliance-checks": {
       "timeoutMs": 45000,
@@ -108,6 +89,21 @@
     "antivirus-status": {
       "timeoutMs": 20000,
       "concurrency": 1
+    },
+    "process-summary": {
+      "timeoutMs": 15000,
+      "concurrency": 1,
+      "maxItems": 250
+    },
+    "network-config": {
+      "timeoutMs": 15000,
+      "concurrency": 1,
+      "maxItems": 100
+    },
+    "disk-security": {
+      "timeoutMs": 20000,
+      "concurrency": 1,
+      "maxItems": 100
     },
     "baseline": {
       "rescanIntervalMs": 86400000

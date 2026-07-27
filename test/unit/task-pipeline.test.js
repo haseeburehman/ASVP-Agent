@@ -31,9 +31,14 @@ test('collector registry finds implemented collectors and reports unknown collec
   assert.equal(registry.has('noop'), true);
   assert.equal(registry.has('does-not-exist'), false);
   assert.equal((await registry.get('noop')).name, 'noop');
-  assert.equal((await registry.get('network-scan')).name, 'network-scan');
-  assert.equal((await registry.get('tls-checks')).name, 'tls-checks');
+  assert.equal(registry.has('network-scan'), false);
+  assert.equal(registry.has('tls-checks'), false);
   assert.equal((await registry.get('compliance-checks')).name, 'compliance-checks');
+  assert.equal((await registry.get('process-summary')).name, 'process-summary');
+  assert.equal((await registry.get('network-config')).name, 'network-config');
+  assert.equal((await registry.get('disk-security')).name, 'disk-security');
+  await assert.rejects(registry.get('network-scan'), /not registered or implemented/);
+  await assert.rejects(registry.get('tls-checks'), /not registered or implemented/);
   await assert.rejects(registry.get('does-not-exist'), /not registered or implemented/);
 });
 
@@ -82,7 +87,7 @@ test('task runner converts an unknown collector into a failed result', async () 
   assert.deepEqual(handedOff, [result]);
 });
 
-test('mock transport runs noop and safely refuses the default network scan end-to-end', async () => {
+test('mock transport exposes only the harmless noop collector task', async () => {
   const apiClient = new ApiClient({
     config: createApiConfig(),
     transport: new MockManagementTransport(),
@@ -98,17 +103,11 @@ test('mock transport runs noop and safely refuses the default network scan end-t
 
   const results = await runner.runAll(tasks);
   const noop = results.find((result) => result.collector === 'noop');
-  const networkScan = results.find((result) => result.collector === 'network-scan');
 
-  assert.equal(tasks.length, 2);
+  assert.equal(tasks.length, 1);
   assert.equal(noop.status, 'success');
   assert.equal(noop.data.message, 'No-op collector completed');
   assert.equal(noop.data.echo.source, 'mock-management-transport');
-  assert.equal(networkScan.status, 'success');
-  assert.equal(networkScan.error, null);
-  assert.equal(networkScan.data.authorization.authorized, false);
-  assert.equal(networkScan.data.authorization.code, 'allowlist-not-configured');
-  assert.deepEqual(networkScan.data.hosts, []);
-  assert.equal(handedOff.length, 2);
+  assert.equal(handedOff.length, 1);
   assert.deepEqual(await apiClient.pollTasks(identity), []);
 });

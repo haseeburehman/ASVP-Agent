@@ -1,8 +1,69 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASVP Fleet</title><link rel="stylesheet" href="/fleet/assets/app.css"></head>
-<body><main>
-<section id="login" class="card login"><h1>ASVP Fleet</h1><p>Sign in with the central server admin token.</p><form id="login-form"><label>Admin token<input id="token" type="password" required autocomplete="current-password"></label><button>Sign in</button><p id="login-error" class="error"></p></form></section>
-<section id="dashboard" hidden><header><div><h1>ASVP Fleet</h1><p id="threshold"></p></div><div><span id="live-state" class="live never-connected">Connecting</span><span id="updated"></span><button id="logout" class="secondary">Log out</button></div></header><div id="summary" class="summary"></div><div class="card"><table><thead><tr><th>Hostname</th><th>Platform</th><th>Agent ID</th><th>Status</th><th>Last heartbeat</th><th>Last poll</th></tr></thead><tbody id="agents"></tbody></table></div><section id="detail" class="card detail" hidden></section></section>
-</main><script type="module" src="/fleet/assets/app.js"></script></body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a1020">
+  <title>ASVP Fleet</title>
+  <link rel="stylesheet" href="/fleet/assets/app.css">
+</head>
+<body>
+  <main class="shell">
+    <section id="login" class="panel login-panel">
+      <div class="brand-mark">A</div>
+      <p class="eyebrow">Security operations</p>
+      <h1>ASVP Fleet</h1>
+      <p>Sign in with the central server admin token.</p>
+      <form id="login-form">
+        <label for="token">Admin token</label>
+        <input id="token" type="password" required autocomplete="current-password" placeholder="Enter your admin token">
+        <button type="submit">Sign in securely</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+    </section>
+    <section id="dashboard" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">A</div>
+          <div><p class="eyebrow">Security operations</p><h1>ASVP Fleet</h1></div>
+        </div>
+        <div class="topbar-actions">
+          <span id="live-state" class="live disconnected"><i></i>Connecting</span>
+          <span id="updated" class="updated"></span>
+          <button id="logout" class="secondary">Log out</button>
+        </div>
+      </header>
+      <div id="fleet-view">
+        <div class="page-heading">
+          <div><p class="eyebrow">Fleet health</p><h2>Endpoint overview</h2><p id="threshold"></p></div>
+        </div>
+        <div id="summary" class="summary"></div>
+        <div class="panel fleet-panel">
+          <div class="panel-heading">
+            <div><h2>Managed endpoints</h2><p id="agent-count"></p></div>
+            <div class="table-tools">
+              <label class="search" for="agent-search"><span>Search</span></label>
+              <input id="agent-search" type="search" placeholder="Hostname or agent ID">
+              <label for="agent-sort"><span>Sort by</span></label>
+              <select id="agent-sort">
+                <option value="status">Status</option>
+                <option value="hostname">Hostname</option>
+                <option value="heartbeat">Last heartbeat</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Endpoint</th><th>Platform</th><th>Agent ID</th><th>Status</th><th>Last heartbeat</th><th>Last poll</th></tr></thead>
+              <tbody id="agents"></tbody>
+            </table>
+          </div>
+          <div id="fleet-empty" class="empty" hidden>No endpoints match this search.</div>
+        </div>
+      </div>
+      <section id="detail" hidden></section>
+    </section>
+  </main>
+  <script type="module" src="/fleet/assets/app.js"></script>
+</body>
 </html>

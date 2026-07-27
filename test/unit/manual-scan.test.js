@@ -8,7 +8,7 @@ import { ResultStore } from '../../src/storage/result-store.js';
 
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 
-function config(queueDir, collectorOverrides = {}) {
+function config(queueDir) {
   return {
     storage: {
       queueDir,
@@ -18,18 +18,6 @@ function config(queueDir, collectorOverrides = {}) {
     },
     collectors: {
       'os-info': { timeoutMs: 1000, concurrency: 1 },
-      'network-scan': {
-        allowedCidrs: ['127.0.0.1/32'],
-        maxCidrSize: 16,
-        allowWideRanges: false,
-        maxConcurrentTargets: 1,
-        maxConcurrentPortsPerHost: 1,
-        maxPortsPerHost: 10,
-        perHostDelayMs: 0,
-        perPortTimeoutMs: 50,
-        maxScanOperationsPerTask: 10,
-        ...collectorOverrides,
-      },
     },
   };
 }
@@ -48,30 +36,7 @@ function registryFor(name, collector, getSpy = () => {}) {
   };
 }
 
-test('manual scan refuses unauthorized targets before collector loading or execution', async () => {
-  let getCalls = 0;
-  let runCalls = 0;
-  const registry = registryFor('network-scan', {
-    name: 'network-scan',
-    version: 'test',
-    async run() { runCalls += 1; return {}; },
-  }, () => { getCalls += 1; });
 
-  await assert.rejects(
-    runManualScan({
-      collectorName: 'network-scan',
-      targets: ['192.0.2.10'],
-      ports: [443],
-      queue: false,
-      config: config('unused'),
-      logger,
-      registry,
-    }),
-    /authorization denied: not in allowedCidrs/,
-  );
-  assert.equal(getCalls, 0);
-  assert.equal(runCalls, 0);
-});
 
 test('manual os-info scan runs without a target through TaskRunner', async () => {
   const registry = registryFor('os-info', {
@@ -105,6 +70,7 @@ test('manual scan durably queues its normalized result by default', async () => 
     const store = new ResultStore({
       ...runtimeConfig.storage,
       logger,
+      encryptionKey: Buffer.alloc(32, 6).toString('base64'),
     });
     const registry = registryFor('os-info', {
       name: 'os-info',

@@ -6,8 +6,10 @@ import test from 'node:test';
 import { AgentLifecycle } from '../../src/agent/lifecycle.js';
 import { DashboardServer } from '../../src/dashboard/server.js';
 import { CredentialStore } from '../../src/security/credentials.js';
+import { ApiClient } from '../../src/transport/api-client.js';
 import { createApp } from '../src/app.js';
-import { createDatabase } from '../src/database.js';
+import { createDatabase, DEFAULT_TENANT_ID } from '../src/database.js';
+import { hashToken } from '../src/crypto.js';
 
 const logger = { info() {}, warn() {}, error() {}, debug() {}, flush() {} };
 
@@ -33,16 +35,19 @@ test('real AgentLifecycle registers, heartbeats, polls, runs os-info, and upload
   const database = createDatabase({ filename: ':memory:' });
   const events = [];
   const adminToken = 'integration-admin-token';
-  const app = createApp({ database, adminToken, baselineCollectors: [], logger: { info: (event) => events.push(event), warn() {}, error() {} } });
+  const app = createApp({ database, adminToken, taskSigningSecret: 'test-task-signing-secret', baselineCollectors: [], logger: { info: (event) => events.push(event), warn() {}, error() {} } });
   const server = await listen(app);
   let lifecycle;
   try {
     const port = server.address().port;
+    const enrollmentToken = 'integration-enrollment-token';
+    database.prepare('INSERT INTO enrollment_tokens (token_hash, tenant_id, created_at, expires_at, max_uses, use_count) VALUES (?, ?, ?, ?, ?, 0)')
+      .run(hashToken(enrollmentToken), DEFAULT_TENANT_ID, new Date().toISOString(), new Date(Date.now() + 3600000).toISOString(), 1);
     const config = {
       server: {
         mode: 'http', url: `http://127.0.0.1:${port}`, registrationPath: '/api/agents/register',
         heartbeatPath: '/api/agents/heartbeat', tasksPath: '/api/agents/tasks/poll',
-        resultsPath: '/api/agents/results', adminToken, requestTimeoutMs: 5000,
+        resultsPath: '/api/agents/results', adminToken, enrollmentToken, requestTimeoutMs: 5000,
       },
       agent: { heartbeatIntervalMs: 150, pollIntervalMs: 150, logLevel: 'silent' },
       dashboard: { enabled: false, port: 4180, bindAddress: '127.0.0.1' },
@@ -60,7 +65,8 @@ test('real AgentLifecycle registers, heartbeats, polls, runs os-info, and upload
     const credentialStore = await new CredentialStore({
       identityPath: config.storage.identityPath, keychain: null, logger, cwd: directory,
     }).initialize();
-    lifecycle = new AgentLifecycle({ config, version: '0.1.0', logger, credentialStore, cwd: directory });
+    const apiClient = new ApiClient({ config, fingerprintProvider: async () => 'a'.repeat(64) });
+    lifecycle = new AgentLifecycle({ config, version: '0.1.0', logger, credentialStore, apiClient, cwd: directory });
     await lifecycle.start();
 
     const dashboard = new DashboardServer({ config, logger, version: '0.1.0', cwd: directory });

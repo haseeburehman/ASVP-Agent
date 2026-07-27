@@ -23,8 +23,11 @@ function createApiClientMock() {
       calls += 1;
       return {
         agentId: `agent-${calls}`,
+        tenantId: 'tenant-1',
         authToken: `token-${calls}`,
         encryptionKey: Buffer.alloc(32, calls).toString('base64'),
+        taskSigningKey: Buffer.alloc(32, calls + 10).toString('base64'),
+        taskSigningKeyId: `task-key-${calls}`,
       };
     },
   };
@@ -150,7 +153,12 @@ test('incomplete existing identity is sent as previousAgentId during migration r
     async saveIdentity(identity) { saved = identity; },
   };
   const replacement = {
-    agentId: 'legacy-agent', authToken: 'rotated-token', encryptionKey: Buffer.alloc(32, 9).toString('base64'),
+    agentId: 'legacy-agent',
+    tenantId: 'tenant-migrated',
+    authToken: 'rotated-token',
+    encryptionKey: Buffer.alloc(32, 9).toString('base64'),
+    taskSigningKey: Buffer.alloc(32, 10).toString('base64'),
+    taskSigningKeyId: 'task-key-migrated',
   };
   const result = await loadOrRegisterIdentity({
     credentialStore,
@@ -160,6 +168,40 @@ test('incomplete existing identity is sent as previousAgentId during migration r
   assert.deepEqual(registrationMetadata, { hostname: 'migration-host', previousAgentId: 'legacy-agent' });
   assert.deepEqual(saved, replacement);
   assert.equal(result.registered, true);
+});
+
+test('re-registers a legacy identity missing task signing fields', async () => {
+  let saved;
+  let registerCalls = 0;
+  const legacy = {
+    agentId: 'legacy-agent',
+    authToken: 'legacy-token',
+    encryptionKey: Buffer.alloc(32, 4).toString('base64'),
+  };
+  const replacement = {
+    ...legacy,
+    tenantId: 'tenant-migrated',
+    taskSigningKey: Buffer.alloc(32, 5).toString('base64'),
+    taskSigningKeyId: 'task-key-new',
+  };
+  const result = await loadOrRegisterIdentity({
+    credentialStore: {
+      async loadIdentity() { return legacy; },
+      async saveIdentity(identity) { saved = identity; },
+    },
+    apiClient: {
+      async register(metadata) {
+        registerCalls += 1;
+        assert.equal(metadata.previousAgentId, legacy.agentId);
+        return replacement;
+      },
+    },
+    validateExisting: async () => assert.fail('legacy identity must not be validated for reuse'),
+  });
+
+  assert.equal(registerCalls, 1);
+  assert.equal(result.registered, true);
+  assert.deepEqual(saved, replacement);
 });
 
 test('rejects incomplete registration responses without persisting them', async () => {
@@ -173,7 +215,7 @@ test('rejects incomplete registration responses without persisting them', async 
       credentialStore: store,
       apiClient: { async register() { return { agentId: 'missing-token' }; } },
     }),
-    /did not include agentId, authToken, and encryptionKey/,
+    /did not include agentId, tenantId, authToken, encryptionKey, taskSigningKey, and taskSigningKeyId/,
   );
   assert.equal(await store.loadIdentity(), null);
 });

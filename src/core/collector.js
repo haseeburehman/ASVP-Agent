@@ -26,10 +26,17 @@ export async function executeCollector({ collector, params = {}, context = {}, t
   validateCollector(collector);
   const startedAt = new Date().toISOString();
   const abortController = new AbortController();
-  const externalAbortHandler = () => abortController.abort(signal?.reason);
+  let rejectAbort;
+  const aborted = new Promise((_, reject) => { rejectAbort = reject; });
+  const externalAbortHandler = () => {
+    abortController.abort(signal?.reason);
+    const error = signal?.reason instanceof Error ? signal.reason : new Error('Collector execution was aborted');
+    error.code ??= 'ABORT_ERR';
+    rejectAbort(error);
+  };
   let timer;
 
-  if (signal?.aborted) abortController.abort(signal.reason);
+  if (signal?.aborted) externalAbortHandler();
   else signal?.addEventListener('abort', externalAbortHandler, { once: true });
 
   try {
@@ -42,6 +49,7 @@ export async function executeCollector({ collector, params = {}, context = {}, t
     const data = await Promise.race([
       Promise.resolve().then(() => collector.run(params, { ...context, signal: abortController.signal })),
       timeout,
+      aborted,
     ]);
     return {
       collector: collector.name,

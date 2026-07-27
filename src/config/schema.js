@@ -42,11 +42,20 @@ export const configSchema = {
     agent: {
       type: 'object',
       additionalProperties: true,
-      required: ['heartbeatIntervalMs', 'pollIntervalMs', 'logLevel'],
+      required: ['heartbeatIntervalMs', 'pollIntervalMs', 'logLevel', 'taskRateLimit'],
       properties: {
         heartbeatIntervalMs: { type: 'integer', minimum: 100 },
         pollIntervalMs: { type: 'integer', minimum: 100 },
         logLevel: { enum: ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] },
+        taskRateLimit: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['maxExecutions', 'windowMs'],
+          properties: {
+            maxExecutions: { type: 'integer', minimum: 1 },
+            windowMs: { type: 'integer', minimum: 1000 },
+          },
+        },
       },
     },
     dashboard: {
@@ -56,7 +65,7 @@ export const configSchema = {
       properties: {
         enabled: { type: 'boolean' },
         port: { type: 'integer', minimum: 1, maximum: 65535 },
-        bindAddress: { type: 'string', minLength: 1 },
+        bindAddress: { enum: ['127.0.0.1', '::1', 'localhost'] },
       },
     },
     storage: {
@@ -65,6 +74,8 @@ export const configSchema = {
       required: [
         'identityPath',
         'statusPath',
+        'taskReplayLedgerPath',
+        'taskJournalPath',
         'queueDir',
         'maxQueueSizeBytes',
         'maxQueueItems',
@@ -73,6 +84,8 @@ export const configSchema = {
       properties: {
         identityPath: { type: 'string', minLength: 1 },
         statusPath: { type: 'string', minLength: 1 },
+        taskReplayLedgerPath: { type: 'string', minLength: 1 },
+        taskJournalPath: { type: 'string', minLength: 1 },
         queueDir: { type: 'string', minLength: 1 },
         maxQueueSizeBytes: { type: 'integer', minimum: 1 },
         maxQueueItems: { type: 'integer', minimum: 1 },
@@ -90,6 +103,35 @@ export const configSchema = {
     },
     collectors: {
       type: 'object',
+      properties: {
+        'process-summary': {
+          type: 'object',
+          required: ['timeoutMs', 'concurrency', 'maxItems'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
+            maxItems: { type: 'integer', minimum: 1 },
+          },
+        },
+        'network-config': {
+          type: 'object',
+          required: ['timeoutMs', 'concurrency', 'maxItems'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
+            maxItems: { type: 'integer', minimum: 1 },
+          },
+        },
+        'disk-security': {
+          type: 'object',
+          required: ['timeoutMs', 'concurrency', 'maxItems'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
+            maxItems: { type: 'integer', minimum: 1 },
+          },
+        },
+      },
       additionalProperties: {
         type: 'object',
         additionalProperties: true,
@@ -106,24 +148,7 @@ export const configSchema = {
           maxManifests: { type: 'integer', minimum: 1 },
           maxContainers: { type: 'integer', minimum: 1 },
           maxPackagesPerContainer: { type: 'integer', minimum: 1 },
-          allowedCidrs: {
-            type: 'array',
-            items: { type: 'string', minLength: 1 },
-            uniqueItems: true,
-          },
-          maxCidrSize: { type: 'integer', minimum: 1, maximum: 128 },
-          allowWideRanges: { type: 'boolean' },
-          maxConcurrentTargets: { type: 'integer', minimum: 1 },
-          maxConcurrentPortsPerHost: { type: 'integer', minimum: 1 },
-          maxPortsPerHost: { type: 'integer', minimum: 1, maximum: 65535 },
-          perHostDelayMs: { type: 'integer', minimum: 0 },
-          perPortTimeoutMs: { type: 'integer', minimum: 1 },
-          bannerTimeoutMs: { type: 'integer', minimum: 1 },
-          maxBannerBytes: { type: 'integer', minimum: 1 },
-          maxScanOperationsPerTask: { type: 'integer', minimum: 1 },
-          perHandshakeTimeoutMs: { type: 'integer', minimum: 1 },
-          nmapTimeoutMs: { type: 'integer', minimum: 1 },
-          expiryWarningDays: { type: 'integer', minimum: 0 },
+
           commandTimeoutMs: { type: 'integer', minimum: 1 },
                     patchCheckTimeoutMs: { type: 'integer', minimum: 1 },
           intervalMs: { type: 'integer', minimum: 100 },

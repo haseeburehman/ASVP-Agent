@@ -52,6 +52,7 @@ export class AgentLifecycle {
     });
     this.logger.info({ agentId: identity.agentId, registered }, registered ? 'Agent registered' : 'Loaded existing agent identity');
 
+    this.resultStore.setEncryptionKey(identity.encryptionKey);
     await this.resultStore.initialize();
     const recoveredCount = await this.resultStore.requeueStaleInFlight();
     this.logger.info({ recoveredQueueItems: recoveredCount }, 'Result queue initialized and in-flight items recovered');

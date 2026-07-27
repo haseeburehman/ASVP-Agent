@@ -5,17 +5,21 @@ import { gzip } from 'node:zlib';
 import test from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
-import { createDatabase } from '../src/database.js';
+import { createDatabase, DEFAULT_TENANT_ID } from '../src/database.js';
 import { hashToken } from '../src/crypto.js';
 import { computeFleetStatus } from '../src/fleet-status.js';
+import { verifyTaskEnvelopeSignature } from '../../src/security/task-envelope.js';
 
 const gzipAsync = promisify(gzip);
 const logger = { info() {}, warn() {}, error() {} };
+const MACHINE_FINGERPRINT = 'a'.repeat(64);
 
 function setup(options = {}) {
   const database = createDatabase({ filename: ':memory:' });
   const adminToken = options.adminToken ?? 'test-admin-token';
-  const app = createApp({ database, adminToken, logger, adminRateLimit: options.adminRateLimit, baselineCollectors: options.baselineCollectors ?? [] });
+  const taskSigningSecret = options.taskSigningSecret ?? 'test-task-signing-secret';
+  const taskSigningKeyId = options.taskSigningKeyId ?? 'test-key-v1';
+  const app = createApp({ database, adminToken, taskSigningSecret, taskSigningKeyId, logger, adminRateLimit: options.adminRateLimit, baselineCollectors: options.baselineCollectors ?? [], now: options.now });
   return { database, api: request(app), adminToken };
 }
 
@@ -23,9 +27,14 @@ function createAdminTask(api, adminToken, body) {
   return api.post('/api/admin/tasks').set('Authorization', `Bearer ${adminToken}`).send(body);
 }
 
-async function register(api) {
+async function issueEnrollmentToken(api, adminToken = 'test-admin-token', tenantId = DEFAULT_TENANT_ID) {
+  return (await api.post('/api/admin/enrollment-tokens').set('Authorization', `Bearer ${adminToken}`).send({ tenantId }).expect(201)).body.token;
+}
+
+async function register(api, body = {}) {
+  const enrollmentToken = body.enrollmentToken ?? await issueEnrollmentToken(api);
   const response = await api.post('/api/agents/register').send({
-    hostname: 'test-host', platform: 'win32', architecture: 'x64', agentVersion: '1.0.0',
+    hostname: 'test-host', platform: 'win32', architecture: 'x64', agentVersion: '1.0.0', machineFingerprint: MACHINE_FINGERPRINT, ...body, enrollmentToken,
   }).expect(201);
   return response.body;
 }
@@ -40,6 +49,7 @@ async function makeEnvelope(result, identity) {
     schemaVersion: 1,
     queueItemId: randomUUID(),
     agentId: identity.agentId,
+    machineFingerprint: MACHINE_FINGERPRINT,
     enqueuedAt: new Date().toISOString(),
     contentEncoding: 'gzip',
     encryption: 'aes-256-gcm',
@@ -55,8 +65,11 @@ test('registration returns exact identity shape and stores only the token hash',
   const { database, api } = setup();
   t.after(() => database.close());
   const identity = await register(api);
-  assert.deepEqual(Object.keys(identity).sort(), ['agentId', 'authToken', 'encryptionKey']);
+  assert.deepEqual(Object.keys(identity).sort(), ['agentId', 'authToken', 'encryptionKey', 'taskSigningKey', 'taskSigningKeyId', 'tenantId']);
   assert.equal(Buffer.from(identity.encryptionKey, 'base64').length, 32);
+  assert.equal(Buffer.from(identity.taskSigningKey, 'base64').length, 32);
+  assert.equal(identity.taskSigningKeyId, 'test-key-v1');
+  assert.equal(identity.tenantId, DEFAULT_TENANT_ID);
   const row = database.prepare('SELECT * FROM agents WHERE id = ?').get(identity.agentId);
   assert.equal(row.auth_token_hash, hashToken(identity.authToken));
   assert.notEqual(row.auth_token_hash, identity.authToken);
@@ -70,7 +83,7 @@ test('registration reuses a known previousAgentId and rotates credentials in one
   const second = await api.post('/api/agents/register')
     .set('Authorization', `Bearer ${first.authToken}`)
     .send({
-      hostname: 'same-host', platform: 'win32', architecture: 'x64', previousAgentId: first.agentId,
+      hostname: 'same-host', platform: 'win32', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, previousAgentId: first.agentId,
     }).expect(201);
   assert.equal(second.body.agentId, first.agentId);
   assert.notEqual(second.body.authToken, first.authToken);
@@ -79,7 +92,8 @@ test('registration reuses a known previousAgentId and rotates credentials in one
   assert.equal(after.id, before.id);
   assert.equal(after.registered_at, before.registered_at);
   assert.notEqual(after.auth_token_hash, before.auth_token_hash);
-  assert.notEqual(after.encryption_key, before.encryption_key);
+  assert.equal(after.encryption_key, before.encryption_key);
+  assert.equal(second.body.encryptionKey, first.encryptionKey);
   assert.equal(after.auth_token_hash, hashToken(second.body.authToken));
 });
 
@@ -90,7 +104,7 @@ test('known previousAgentId with wrong prior credential cannot take over the exi
   const before = database.prepare('SELECT * FROM agents WHERE id = ?').get(first.agentId);
   const response = await api.post('/api/agents/register')
     .set('Authorization', 'Bearer wrong-previous-token')
-    .send({ hostname: 'attacker-host', platform: 'win32', architecture: 'x64', previousAgentId: first.agentId })
+    .send({ hostname: 'attacker-host', platform: 'win32', architecture: 'x64', machineFingerprint: 'b'.repeat(64), previousAgentId: first.agentId, enrollmentToken: await issueEnrollmentToken(api) })
     .expect(201);
   assert.notEqual(response.body.agentId, first.agentId);
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agents').get().count, 2);
@@ -103,7 +117,7 @@ test('registration falls back to a new agent when previousAgentId is unknown', a
   t.after(() => database.close());
   const unknown = randomUUID();
   const response = await api.post('/api/agents/register').send({
-    hostname: 'new-server-host', platform: 'win32', architecture: 'x64', previousAgentId: unknown,
+    hostname: 'new-server-host', platform: 'win32', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, previousAgentId: unknown, enrollmentToken: await issueEnrollmentToken(api),
   }).expect(201);
   assert.notEqual(response.body.agentId, unknown);
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agents').get().count, 1);
@@ -116,7 +130,7 @@ test('deregister marks an authenticated agent as intentionally removed', async (
   await api.post('/api/agents/deregister').send({ agentId: identity.agentId }).expect(401);
   const response = await api.post('/api/agents/deregister')
     .set('Authorization', `Bearer ${identity.authToken}`)
-    .send({ agentId: identity.agentId }).expect(200);
+    .send({ agentId: identity.agentId, machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
   assert.equal(response.body.accepted, true);
   const row = database.prepare('SELECT status, deregistered_at FROM agents WHERE id = ?').get(identity.agentId);
   assert.equal(row.status, 'deregistered');
@@ -136,6 +150,7 @@ test('heartbeat requires bearer auth, validates agentId, and updates presence', 
     lastSuccessfulHeartbeat: null,
     currentQueueSize: 3,
     agentVersion: '0.1.0',
+    machineFingerprint: MACHINE_FINGERPRINT,
   };
   await api.post('/api/agents/heartbeat').send(heartbeat).expect(401);
   const response = await api.post('/api/agents/heartbeat')
@@ -151,7 +166,7 @@ test('heartbeat requires bearer auth, validates agentId, and updates presence', 
 test('admin task creation rejects missing and wrong tokens without creating tasks', async (t) => {
   const { database, api } = setup();
   t.after(() => database.close());
-  const body = { agentId: null, collectorName: 'os-info', params: {} };
+  const body = { agentId: null, tenantId: DEFAULT_TENANT_ID, collectorName: 'os-info', params: {} };
   const missing = await api.post('/api/admin/tasks').send(body).expect(401);
   const wrong = await api.post('/api/admin/tasks').set('Authorization', 'Bearer wrong-token').send(body).expect(401);
   assert.deepEqual(missing.body, { error: 'Unauthorized' });
@@ -162,34 +177,57 @@ test('admin task creation rejects missing and wrong tokens without creating task
 test('admin rate limit rejects rapid requests after the configured allowance', async (t) => {
   const { database, api, adminToken } = setup({ adminRateLimit: { maxRequests: 2, windowMs: 60000 } });
   t.after(() => database.close());
-  const body = { agentId: null, collectorName: 'os-info', params: {} };
+  const body = { agentId: null, tenantId: DEFAULT_TENANT_ID, collectorName: 'os-info', params: {} };
   await createAdminTask(api, adminToken, body).expect(201);
   await createAdminTask(api, adminToken, body).expect(201);
   await createAdminTask(api, adminToken, body).expect(429);
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM tasks').get().count, 2);
 });
 
-test('task creation and poll return exact task shape once', async (t) => {
-  const { database, api, adminToken } = setup();
+test('task poll signs queued tasks with expiring monotonic per-agent envelopes', async (t) => {
+  const clock = new Date('2026-01-01T00:00:00.000Z');
+  const { database, api, adminToken } = setup({ now: () => new Date(clock) });
   t.after(() => database.close());
   const identity = await register(api);
-  const created = await createAdminTask(api, adminToken, {
-    agentId: identity.agentId, collectorName: 'os-info', params: { reason: 'contract-test' },
+  const firstCreated = await createAdminTask(api, adminToken, {
+    agentId: identity.agentId, collectorName: 'os-info', params: { z: 1, nested: { z: false, a: true }, a: 2 },
   }).expect(201);
-  assert.deepEqual(Object.keys(created.body), ['taskId']);
-  const first = await api.post('/api/agents/tasks/poll')
-    .set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId }).expect(200);
-  assert.equal(first.body.length, 1);
-  assert.deepEqual(first.body[0], {
-    taskId: created.body.taskId,
-    collectorName: 'os-info',
-    params: { reason: 'contract-test' },
-    scheduledAt: first.body[0].scheduledAt,
-  });
-  assert.ok(first.body[0].scheduledAt);
-  const second = await api.post('/api/agents/tasks/poll')
-    .set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId }).expect(200);
-  assert.deepEqual(second.body, []);
+  const secondCreated = await createAdminTask(api, adminToken, {
+    agentId: null, tenantId: DEFAULT_TENANT_ID, collectorName: 'apps', params: { scope: 'all' },
+  }).expect(201);
+
+  const response = await api.post('/api/agents/tasks/poll')
+    .set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId, machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
+  assert.equal(response.body.length, 2);
+  const first = response.body.find((task) => task.taskId === firstCreated.body.taskId);
+  const second = response.body.find((task) => task.taskId === secondCreated.body.taskId);
+  assert.ok(first);
+  assert.ok(second);
+  assert.deepEqual(Object.keys(first).sort(), ['agentId', 'collectorName', 'expiresAt', 'issuedAt', 'keyId', 'nonce', 'params', 'sequence', 'signature', 'taskId', 'tenantId']);
+  assert.equal(first.tenantId, DEFAULT_TENANT_ID);
+  assert.equal(first.agentId, identity.agentId);
+  assert.equal(first.issuedAt, clock.toISOString());
+  assert.equal(first.expiresAt, new Date(clock.getTime() + 600000).toISOString());
+  assert.equal(first.keyId, identity.taskSigningKeyId);
+  assert.deepEqual(Object.keys(first.params), ['a', 'nested', 'z']);
+  assert.deepEqual(Object.keys(first.params.nested), ['a', 'z']);
+  assert.deepEqual(response.body.map((task) => task.sequence), [1, 2]);
+  assert.notEqual(first.nonce, second.nonce);
+  const signingKey = identity.taskSigningKey;
+  assert.ok(response.body.every((task) => verifyTaskEnvelopeSignature(task, signingKey)));
+  assert.equal(database.prepare('SELECT task_sequence FROM agents WHERE id = ?').get(identity.agentId).task_sequence, 2);
+
+  const thirdCreated = await createAdminTask(api, adminToken, {
+    agentId: identity.agentId, collectorName: 'users-groups', params: {},
+  }).expect(201);
+  const next = await api.post('/api/agents/tasks/poll')
+    .set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId, machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
+  assert.equal(next.body[0].taskId, thirdCreated.body.taskId);
+  assert.equal(next.body[0].sequence, 3);
+  assert.ok(verifyTaskEnvelopeSignature(next.body[0], signingKey));
+  const empty = await api.post('/api/agents/tasks/poll')
+    .set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId, machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
+  assert.deepEqual(empty.body, []);
 });
 
 test('encrypted result endpoint decrypts, gunzips, stores, and exactly acknowledges', async (t) => {
@@ -200,7 +238,7 @@ test('encrypted result endpoint decrypts, gunzips, stores, and exactly acknowled
     agentId: identity.agentId, collectorName: 'os-info', params: {},
   }).expect(201);
   await api.post('/api/agents/tasks/poll')
-    .set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId }).expect(200);
+    .set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId, machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
   const normalized = {
     taskId: task.body.taskId,
     collector: 'os-info',

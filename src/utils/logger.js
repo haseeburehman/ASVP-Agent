@@ -3,13 +3,25 @@ import pino from 'pino';
 
 const redactPaths = [
   'authToken',
+  'encryptionKey',
+  'taskSigningKey',
+  'enrollmentToken',
+  'machineFingerprint',
   'adminToken',
   'config.server.adminToken',
+  'config.server.enrollmentToken',
+  'server.enrollmentToken',
   'token',
   'identity.authToken',
+  'identity.encryptionKey',
+  'identity.taskSigningKey',
+  'identity.machineFingerprint',
   'identity.token',
   'config.authentication',
   'req.headers.authorization',
+  'req.body.machineFingerprint',
+  'request.body.machineFingerprint',
+  'body.machineFingerprint',
   'headers.authorization',
 ];
 

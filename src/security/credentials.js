@@ -92,7 +92,7 @@ export class CredentialStore {
   }
 
   async saveIdentity(identity) {
-    if (!identity?.agentId || !identity?.authToken || !identity?.encryptionKey) {
+    if (!identity?.agentId || !identity?.tenantId || !identity?.authToken || !identity?.encryptionKey || !identity?.taskSigningKey || !identity?.taskSigningKeyId) {
       throw new Error('Cannot persist an incomplete agent identity');
     }
     if (this.keychain) {

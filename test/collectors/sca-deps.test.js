@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -111,6 +111,55 @@ test('no configured scan paths safely returns an empty result', async () => {
   assert.match(result.metadata.importStatusLimitation, /static analysis/);
 });
 
+test('collector refuses forbidden scan roots before filesystem traversal', async () => {
+  let statCalls = 0;
+  const collector = createScaDepsCollector({
+    statPath: async () => { statCalls += 1; throw new Error('must not be reached'); },
+  });
+  await assert.rejects(
+    collector.run({}, { collectorConfig: { scanPaths: [os.homedir()], maxDepth: 6, maxManifests: 100 } }),
+    /SCA scan path.*is forbidden: the current user home directory is not allowed/,
+  );
+  assert.equal(statCalls, 0);
+});
+
+test('collector rejects a configured symlink root resolving to a forbidden location', async () => {
+  await withTempDirectory(async (directory) => {
+    const linkedRoot = path.join(directory, 'linked-home');
+    await symlink(os.homedir(), linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    const collector = createScaDepsCollector({ cwd: directory });
+    await assert.rejects(
+      collector.run({}, { collectorConfig: { scanPaths: ['linked-home'], maxDepth: 6, maxManifests: 100 } }),
+      /SCA scan path.*linked-home.*is forbidden: the current user home directory is not allowed/,
+    );
+  });
+});
+
+test('collector follows an allowed configured symlink root but still skips nested symlinks', async () => {
+  await withTempDirectory(async (directory) => {
+    const project = path.join(directory, 'projects', 'service');
+    const linkedRoot = path.join(directory, 'linked-project');
+    await mkdir(project, { recursive: true });
+    await writeFile(path.join(project, 'package.json'), JSON.stringify({ dependencies: { allowed: '1.0.0' } }));
+    await symlink(project, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    const collector = createScaDepsCollector({ cwd: directory });
+    const result = await collector.run({}, { collectorConfig: { scanPaths: ['linked-project'], maxDepth: 6, maxManifests: 100 } });
+    assert.deepEqual(result.dependencies.map(({ name }) => name), ['allowed']);
+  });
+});
+
+test('traversal skips credential directories beneath an allowed project root', async () => {
+  await withTempDirectory(async (directory) => {
+    const project = path.join(directory, 'project');
+    await mkdir(path.join(project, '.ssh'), { recursive: true });
+    await writeFile(path.join(project, 'package.json'), JSON.stringify({ dependencies: { allowed: '1.0.0' } }));
+    await writeFile(path.join(project, '.ssh', 'package.json'), JSON.stringify({ dependencies: { forbidden: '1.0.0' } }));
+    const collector = createScaDepsCollector({ cwd: directory });
+    const result = await collector.run({}, { collectorConfig: { scanPaths: ['project'], maxDepth: 6, maxManifests: 100 } });
+    assert.deepEqual(result.dependencies.map(({ name }) => name), ['allowed']);
+  });
+});
+
 test('traversal enforces maxDepth and skips dependency noise directories', async () => {
   const discovery = await discoverManifests({
     scanPaths: [fixtureRoot],
@@ -169,7 +218,7 @@ test('malformed manifests are skipped with a reason without failing collection',
 });
 
 test('fixture project is collected end-to-end with declared-only status', async () => {
-  const collector = createScaDepsCollector();
+  const collector = createScaDepsCollector({ homeDirectory: path.join(fixtureRoot, 'non-personal-test-home') });
   const result = await collector.run({}, {
     collectorConfig: { scanPaths: [fixtureRoot], maxDepth: 6, maxManifests: 100 },
   });

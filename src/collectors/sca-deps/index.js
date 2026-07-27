@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
+import { CREDENTIAL_DIRECTORY_NAMES, validateScaScanPaths } from '../../security/sca-scan-paths.js';
 
 const MANIFEST_NAMES = new Set([
   'package.json',
@@ -22,6 +23,7 @@ const NOISE_DIRECTORIES = new Set([
   'dist',
   'build',
   'target',
+  ...CREDENTIAL_DIRECTORY_NAMES,
 ]);
 const IMPORT_STATUS_NOTE = 'Import status is "declared" because reliable used/unused detection requires ecosystem-specific static analysis, which is not performed.';
 
@@ -326,6 +328,7 @@ export function createScaDepsCollector({
   readDirectory = readdir,
   statPath = stat,
   cwd = process.cwd(),
+  homeDirectory,
 } = {}) {
   return {
     name: 'sca-deps',
@@ -333,6 +336,7 @@ export function createScaDepsCollector({
     async run(_params = {}, context = {}) {
       const config = context.collectorConfig ?? {};
       const scanPaths = Array.isArray(config.scanPaths) ? config.scanPaths.filter(Boolean) : [];
+      await validateScaScanPaths(scanPaths, { cwd, homeDirectory, identityPath: config.identityPath });
       const maxDepth = Number.isInteger(config.maxDepth) && config.maxDepth >= 0 ? config.maxDepth : 6;
       const maxManifests = Number.isInteger(config.maxManifests) && config.maxManifests > 0 ? config.maxManifests : 200;
       const metadata = {

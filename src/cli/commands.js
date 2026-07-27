@@ -4,8 +4,7 @@ import path from 'node:path';
 import { Command } from 'commander';
 import { AgentLifecycle } from '../agent/lifecycle.js';
 import { readStatus } from '../agent/runtime.js';
-import { authorizeNetworkScan } from '../collectors/network-scan/authorization.js';
-import { DEFAULT_TLS_PORTS } from '../collectors/tls-checks/index.js';
+
 import { loadConfig } from '../config/loader.js';
 import { CollectorRegistry } from '../core/collector-registry.js';
 import { TaskRunner } from '../core/task-runner.js';
@@ -27,7 +26,7 @@ async function createContext(options) {
   return { config, logger, version: await getVersion() };
 }
 
-const REMOTE_COLLECTORS = new Set(['network-scan', 'tls-checks']);
+
 
 export function parseCommaSeparated(value, label) {
   const values = value.split(',').map((item) => item.trim()).filter(Boolean);
@@ -84,13 +83,21 @@ export function parseOperatorCommand(input) {
   };
 }
 
-function createResultStore(config, logger, cwd) {
+async function createResultStore(config, logger, cwd) {
+  const credentialStore = await new CredentialStore({
+    identityPath: config.storage.identityPath,
+    logger,
+    cwd,
+  }).initialize();
+  const identity = await credentialStore.loadIdentity();
+  if (!identity?.encryptionKey) throw new Error('Cannot queue results before the agent has registered and persisted an encryption key');
   return new ResultStore({
     queueDir: config.storage.queueDir,
     maxQueueSizeBytes: config.storage.maxQueueSizeBytes,
     maxQueueItems: config.storage.maxQueueItems,
     maxItemAgeMs: config.storage.maxItemAgeMs,
     logger,
+    encryptionKey: identity.encryptionKey,
     cwd,
   });
 }
@@ -102,15 +109,9 @@ export function formatScanSummary(result, queued) {
     `Task ID: ${result.taskId}`,
   ];
   if (result.error) lines.push(`Error: ${result.error.message}`);
-  if (result.collector === 'network-scan' && result.data) {
-    const hosts = result.data.hosts ?? [];
-    lines.push(`Hosts up: ${hosts.filter((host) => host.status === 'up').length}/${hosts.length}`);
-    lines.push(`Open ports: ${hosts.reduce((count, host) => count + (host.openPorts?.length ?? 0), 0)}`);
-  } else if (result.collector === 'os-info' && result.data) {
+  if (result.collector === 'os-info' && result.data) {
     lines.push(`OS: ${result.data.prettyName ?? result.data.os?.prettyName ?? 'unknown'}`);
     lines.push(`Version: ${result.data.version ?? result.data.os?.version ?? 'unknown'}`);
-  } else if (result.collector === 'tls-checks' && result.data) {
-    lines.push(`Endpoints checked: ${result.data.endpoints?.length ?? 0}`);
   }
   lines.push(queued ? `Queue item: ${queued.id}` : 'Queue: skipped (--no-queue)');
   return `${lines.join('\n')}\n`;
@@ -131,31 +132,10 @@ export async function runManualScan({
 }) {
   if (!registry.has(collectorName)) throw new Error(`Unknown collector "${collectorName}"`);
 
-  const remote = REMOTE_COLLECTORS.has(collectorName);
-  if (remote && (!Array.isArray(targets) || targets.length === 0)) {
-    throw new Error(`--target is required for collector "${collectorName}"`);
-  }
-  const params = remote ? {
-    targets,
-    ports: ports ?? (collectorName === 'tls-checks' ? [...DEFAULT_TLS_PORTS] : undefined),
-  } : {};
-
-  if (remote) {
-    const authorization = authorizeNetworkScan({
-      config: config.collectors[collectorName],
-      taskParams: params,
-    });
-    if (!authorization.authorized || authorization.deniedTargets.length > 0) {
-      const denied = authorization.deniedTargets.map((entry) => entry.target).filter(Boolean);
-      const detail = denied.length > 0 ? ` (${denied.join(', ')})` : '';
-      const error = new Error(`authorization denied: not in allowedCidrs${detail}: ${authorization.reason ?? authorization.deniedTargets[0]?.reason ?? 'target refused'}`);
-      error.code = 'AUTHORIZATION_DENIED';
-      throw error;
-    }
-  }
+  const params = {};
 
   let store = resultStore;
-  if (queue && !store) store = createResultStore(config, logger, cwd);
+  if (queue && !store) store = await createResultStore(config, logger, cwd);
   if (queue) await store.initialize();
   let queued = null;
   const runner = new TaskRunner({

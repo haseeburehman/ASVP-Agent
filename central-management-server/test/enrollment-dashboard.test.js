@@ -2,46 +2,47 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
-import { createDatabase } from '../src/database.js';
+import { createDatabase, DEFAULT_TENANT_ID } from '../src/database.js';
 
 const logger = { info() {}, warn() {}, error() {} };
+const MACHINE_FINGERPRINT = 'a'.repeat(64);
 function setup(options = {}) {
   const database = createDatabase({ filename: ':memory:' });
   let clock = new Date('2026-01-01T00:00:00.000Z');
-  const app = createApp({ database, adminToken: 'admin-secret', logger, now: () => new Date(clock), rateNow: () => clock.getTime(), baselineCollectors: [], ...options });
+  const app = createApp({ database, adminToken: 'admin-secret', taskSigningSecret: 'test-task-signing-secret', logger, now: () => new Date(clock), rateNow: () => clock.getTime(), baselineCollectors: [], ...options });
   return { database, app, api: request(app), setTime(value) { clock = new Date(value); } };
 }
 async function token(api, body = {}) {
-  return (await api.post('/api/admin/enrollment-tokens').set('Authorization', 'Bearer admin-secret').send(body).expect(201)).body;
+  return (await api.post('/api/admin/enrollment-tokens').set('Authorization', 'Bearer admin-secret').send({ tenantId: DEFAULT_TENANT_ID, ...body }).expect(201)).body;
 }
-function register(api, body = {}) {
-  return api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', ...body });
+async function register(api, body = {}) {
+  const enrollmentToken = body.enrollmentToken ?? (await token(api)).token;
+  return (await api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, ...body, enrollmentToken }).expect(201)).body;
 }
 
- test('enrollment tokens are hashed, limited, expiring, and optional by default', async (t) => {
-  const optional = setup(); t.after(() => optional.database.close());
-  await register(optional.api).expect(201);
-  const required = setup({ requireEnrollmentToken: true }); t.after(() => required.database.close());
-  await register(required.api).expect(403);
-  await register(required.api, { enrollmentToken: 'wrong' }).expect(403);
+ test('new registration always requires a tenant-bound, limited, unexpired token', async (t) => {
+  const required = setup(); t.after(() => required.database.close());
+  await required.api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT }).expect(403);
+  await required.api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, enrollmentToken: 'wrong' }).expect(403);
   const issued = await token(required.api, { expiresInHours: 24, maxUses: 1 });
   assert.equal(required.database.prepare('SELECT token_hash FROM enrollment_tokens').get().token_hash.includes(issued.token), false);
-  const identity = (await register(required.api, { enrollmentToken: issued.token }).expect(201)).body;
-    await register(required.api, { enrollmentToken: issued.token }).expect(403);
+  const identity = await register(required.api, { enrollmentToken: issued.token });
+    await required.api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, enrollmentToken: issued.token }).expect(403);
     await required.api.post('/api/agents/register')
       .set('Authorization', `Bearer ${identity.authToken}`)
-      .send({ hostname: 'host', platform: 'linux', architecture: 'x64', previousAgentId: identity.agentId })
+      .send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, previousAgentId: identity.agentId })
       .expect(201);
+  assert.equal(required.database.prepare('SELECT tenant_id FROM agents WHERE id = ?').get(identity.agentId).tenant_id, DEFAULT_TENANT_ID);
   const expiring = await token(required.api, { expiresInHours: 1, maxUses: 2 });
   required.setTime('2026-01-01T02:00:00.000Z');
-  await register(required.api, { enrollmentToken: expiring.token }).expect(403);
+  await required.api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, enrollmentToken: expiring.token }).expect(403);
 });
 
 test('authenticated fleet computes independent states and flips overdue agents stale', async (t) => {
   const env = setup({ expectedHeartbeatIntervalMs: 30000 }); t.after(() => env.database.close());
-  const first = (await register(env.api).expect(201)).body;
-  const second = (await register(env.api, { hostname: 'never-host', platform: 'win32' }).expect(201)).body;
-  await env.api.post('/api/agents/heartbeat').set('Authorization', `Bearer ${first.authToken}`).send({ agentId: first.agentId, hostname: 'online-host' }).expect(200);
+  const first = await register(env.api);
+  const second = await register(env.api, { hostname: 'never-host', platform: 'win32' });
+  await env.api.post('/api/agents/heartbeat').set('Authorization', `Bearer ${first.authToken}`).send({ agentId: first.agentId, hostname: 'online-host', machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
   const agent = request.agent(env.app);
   await agent.post('/api/dashboard/session').send({ token: 'admin-secret' }).expect(200);
   let fleet = await agent.get('/api/dashboard/fleet').expect(200);
@@ -55,8 +56,8 @@ test('authenticated fleet computes independent states and flips overdue agents s
 
 test('dashboard requires a session and detail data is isolated per agent', async (t) => {
   const env = setup(); t.after(() => env.database.close());
-  const first = (await register(env.api, { hostname: 'one' }).expect(201)).body;
-  const second = (await register(env.api, { hostname: 'two' }).expect(201)).body;
+  const first = await register(env.api, { hostname: 'one' });
+  const second = await register(env.api, { hostname: 'two' });
   await env.api.get('/fleet').expect(302).expect('Location', '/login');
     await env.api.get('/api/dashboard/fleet').expect(401);
     await env.api.post('/api/dashboard/session').send({ token: 'wrong' }).expect(401);

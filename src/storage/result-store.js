@@ -10,10 +10,12 @@ import {
   stat,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { decrypt, encrypt } from '../security/crypto.js';
 
 const METRICS_FILE = '_metrics.json';
 const ITEM_SUFFIX = '.json';
 const VALID_STATES = new Set(['pending', 'in-flight', 'delivered', 'failed-permanent']);
+const ENCRYPTED_ITEM_VERSION = 1;
 
 async function syncDirectory(directory) {
   let handle;
@@ -48,6 +50,22 @@ async function atomicWriteJson(filePath, value) {
   }
 }
 
+async function atomicWriteEncryptedItem(filePath, item, encryptionKey) {
+  const protectedPayload = encrypt(Buffer.from(JSON.stringify(item), 'utf8'), encryptionKey);
+  await atomicWriteJson(filePath, {
+    version: ENCRYPTED_ITEM_VERSION,
+    algorithm: protectedPayload.algorithm,
+    iv: protectedPayload.iv,
+    authTag: protectedPayload.authTag,
+    ciphertext: protectedPayload.ciphertext,
+  });
+}
+
+function decryptItem(value, encryptionKey) {
+  if (value?.version !== ENCRYPTED_ITEM_VERSION || value?.algorithm !== 'aes-256-gcm') return null;
+  return JSON.parse(decrypt(value.ciphertext, encryptionKey, value.iv, value.authTag).toString('utf8'));
+}
+
 function normalizeError(error) {
   if (error == null) return null;
   if (typeof error === 'string') return error;
@@ -61,6 +79,7 @@ export class ResultStore {
     maxQueueItems,
     maxItemAgeMs,
     logger,
+    encryptionKey,
     cwd = process.cwd(),
     now = () => new Date(),
   }) {
@@ -69,13 +88,21 @@ export class ResultStore {
     this.maxQueueItems = maxQueueItems;
     this.maxItemAgeMs = maxItemAgeMs;
     this.logger = logger;
+    this.encryptionKey = encryptionKey;
     this.now = now;
     this.operationChain = Promise.resolve();
     this.initialized = false;
   }
 
+  setEncryptionKey(encryptionKey) {
+    if (this.initialized) throw new Error('ResultStore encryption key cannot be changed after initialization');
+    this.encryptionKey = encryptionKey;
+    return this;
+  }
+
   async initialize() {
     return this.#serialize(async () => {
+      if (!this.encryptionKey) throw new Error('ResultStore requires the registered agent encryptionKey');
       await mkdir(this.queueDir, { recursive: true, mode: 0o700 });
       await chmod(this.queueDir, 0o700).catch((error) => {
         if (process.platform !== 'win32') throw error;
@@ -91,6 +118,7 @@ export class ResultStore {
         await rm(probePath, { force: true }).catch(() => {});
         throw new Error(`Result queue directory is not writable: ${this.queueDir}: ${error.message}`, { cause: error });
       }
+      await this.#migratePlaintextItems();
       this.initialized = true;
       await this.#readMetrics();
       return this;
@@ -109,7 +137,7 @@ export class ResultStore {
         lastAttemptAt: null,
         lastError: null,
       };
-      await atomicWriteJson(this.#itemPath(item.id), item);
+      await atomicWriteEncryptedItem(this.#itemPath(item.id), item, this.encryptionKey);
       const eviction = await this.#enforceLimits();
       return {
         ...item,
@@ -164,11 +192,11 @@ export class ResultStore {
       let recoveredCount = 0;
       for (const item of items) {
         if (item.state !== 'in-flight') continue;
-        await atomicWriteJson(this.#itemPath(item.id), {
+        await atomicWriteEncryptedItem(this.#itemPath(item.id), {
           ...item,
           state: 'pending',
           lastError: 'Recovered an in-flight queue item after process restart',
-        });
+        }, this.encryptionKey);
         recoveredCount += 1;
       }
       await this.#enforceLimits();
@@ -203,7 +231,7 @@ export class ResultStore {
       const item = await this.#readItem(id);
       const updated = transform(item);
       if (!VALID_STATES.has(updated.state)) throw new Error(`Invalid queue delivery state: ${updated.state}`);
-      await atomicWriteJson(this.#itemPath(id), updated);
+      await atomicWriteEncryptedItem(this.#itemPath(id), updated, this.encryptionKey);
       return updated;
     });
   }
@@ -284,7 +312,8 @@ export class ResultStore {
       const filePath = path.join(this.queueDir, name);
       try {
         const [content, details] = await Promise.all([readFile(filePath, 'utf8'), stat(filePath)]);
-        const item = JSON.parse(content);
+        const item = decryptItem(JSON.parse(content), this.encryptionKey);
+        if (!item) throw new Error('queue item is not encrypted');
         if (!item.id || !VALID_STATES.has(item.state)) throw new Error('missing id or invalid state');
         entries.push({ item, size: details.size });
       } catch (error) {
@@ -296,12 +325,27 @@ export class ResultStore {
 
   async #readItem(id) {
     try {
-      const item = JSON.parse(await readFile(this.#itemPath(id), 'utf8'));
+      const item = decryptItem(JSON.parse(await readFile(this.#itemPath(id), 'utf8')), this.encryptionKey);
+      if (!item) throw new Error('queue item is not encrypted');
       if (!VALID_STATES.has(item.state)) throw new Error(`invalid state ${item.state}`);
       return item;
     } catch (error) {
       if (error.code === 'ENOENT') throw new Error(`Result queue item not found: ${id}`, { cause: error });
       throw new Error(`Unable to read result queue item ${id}: ${error.message}`, { cause: error });
+    }
+  }
+
+  async #migratePlaintextItems() {
+    const names = (await readdir(this.queueDir)).filter((name) => name.endsWith(ITEM_SUFFIX) && name !== METRICS_FILE);
+    for (const name of names) {
+      const filePath = path.join(this.queueDir, name);
+      const value = JSON.parse(await readFile(filePath, 'utf8'));
+      if (value?.version === ENCRYPTED_ITEM_VERSION && value?.algorithm === 'aes-256-gcm') {
+        decryptItem(value, this.encryptionKey);
+        continue;
+      }
+      if (!value?.id || !VALID_STATES.has(value.state)) throw new Error(`Unable to migrate invalid result queue item ${filePath}`);
+      await atomicWriteEncryptedItem(filePath, value, this.encryptionKey);
     }
   }
 

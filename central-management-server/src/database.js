@@ -2,9 +2,19 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 
+export const DEFAULT_TENANT_ID = '00000000-0000-4000-8000-000000000000';
+export const DEFAULT_TENANT_NAME = 'Default tenant';
+
 const schema = `
+CREATE TABLE IF NOT EXISTS tenants (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  status TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
   hostname TEXT,
   auth_token_hash TEXT NOT NULL UNIQUE,
   encryption_key TEXT NOT NULL,
@@ -15,10 +25,13 @@ CREATE TABLE IF NOT EXISTS agents (
   architecture TEXT,
   last_poll_at TEXT,
   agent_version TEXT,
-  deregistered_at TEXT
+  deregistered_at TEXT,
+  task_sequence INTEGER NOT NULL DEFAULT 0,
+  machine_fingerprint TEXT
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
   agent_id TEXT REFERENCES agents(id),
   collector_name TEXT NOT NULL,
   params TEXT NOT NULL,
@@ -28,6 +41,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE TABLE IF NOT EXISTS results (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
   agent_id TEXT NOT NULL REFERENCES agents(id),
   task_id TEXT REFERENCES tasks(id),
   collector TEXT NOT NULL,
@@ -37,6 +51,7 @@ CREATE TABLE IF NOT EXISTS results (
 );
 CREATE TABLE IF NOT EXISTS enrollment_tokens (
   token_hash TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   max_uses INTEGER,
@@ -44,20 +59,42 @@ CREATE TABLE IF NOT EXISTS enrollment_tokens (
 );
 CREATE TABLE IF NOT EXISTS agent_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
   agent_id TEXT REFERENCES agents(id),
   event_type TEXT NOT NULL,
   details TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_tasks_poll ON tasks(status, agent_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_results_agent ON results(agent_id, received_at);
-CREATE INDEX IF NOT EXISTS idx_events_agent ON agent_events(agent_id, created_at);
 `;
 
 function addColumn(database, table, definition) {
   const name = definition.split(/\s+/)[0];
   const columns = database.prepare(`PRAGMA table_info(${table})`).all();
   if (!columns.some((column) => column.name === name)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+}
+
+function migrateTenantFoundation(database) {
+  const migratedAt = new Date(0).toISOString();
+  database.prepare('INSERT OR IGNORE INTO tenants (id, name, created_at, status) VALUES (?, ?, ?, ?)')
+    .run(DEFAULT_TENANT_ID, DEFAULT_TENANT_NAME, migratedAt, 'active');
+
+  // SQLite cannot add a NOT NULL foreign-key column to populated tables in place.
+  // New databases get the strict schema above; legacy tables get the FK column and
+  // are immediately backfilled before foreign-key enforcement is checked.
+  for (const table of ['agents', 'tasks', 'results', 'agent_events', 'enrollment_tokens']) {
+    addColumn(database, table, 'tenant_id TEXT REFERENCES tenants(id)');
+    database.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`).run(DEFAULT_TENANT_ID);
+  }
+
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id, id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_poll ON tasks(tenant_id, status, agent_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_results_agent ON results(tenant_id, agent_id, received_at);
+    CREATE INDEX IF NOT EXISTS idx_events_agent ON agent_events(tenant_id, agent_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_enrollment_tokens_tenant ON enrollment_tokens(tenant_id, expires_at);
+  `);
+  const violations = database.prepare('PRAGMA foreign_key_check').all();
+  if (violations.length) throw new Error(`Tenant migration left ${violations.length} foreign-key violation(s)`);
 }
 
 export function createDatabase({ filename = 'var/management.sqlite', cwd = process.cwd() } = {}) {
@@ -70,7 +107,10 @@ export function createDatabase({ filename = 'var/management.sqlite', cwd = proce
   addColumn(database, 'agents', 'platform TEXT');
   addColumn(database, 'agents', 'architecture TEXT');
   addColumn(database, 'agents', 'last_poll_at TEXT');
-    addColumn(database, 'agents', 'agent_version TEXT');
-    addColumn(database, 'agents', 'deregistered_at TEXT');
+  addColumn(database, 'agents', 'agent_version TEXT');
+  addColumn(database, 'agents', 'deregistered_at TEXT');
+  addColumn(database, 'agents', 'task_sequence INTEGER NOT NULL DEFAULT 0');
+  addColumn(database, 'agents', 'machine_fingerprint TEXT');
+  database.transaction(() => migrateTenantFoundation(database))();
   return database;
 }

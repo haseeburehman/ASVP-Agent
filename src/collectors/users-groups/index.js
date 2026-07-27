@@ -21,11 +21,10 @@ function parseJsonRecords(output) {
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
-function parsePasswd(contents, shadowByName) {
+function parsePasswd(contents, passwordStatusByName) {
   return contents.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [name, password, uid, gid, description, homeDirectory, shell] = line.split(':');
-    const shadow = shadowByName?.get(name);
-    const shadowPassword = shadow?.password;
+    const [name, , uid, gid, description, homeDirectory, shell] = line.split(':');
+    const passwordStatus = passwordStatusByName?.get(name);
     return {
       name,
       uid: Number(uid),
@@ -33,22 +32,54 @@ function parsePasswd(contents, shadowByName) {
       description: description || null,
       homeDirectory: homeDirectory || null,
       shell: shell || null,
-      passwordLocked: shadowPassword === undefined
-        ? (['!', '*', '!!'].includes(password) ? true : null)
-        : /^!|^\*/.test(shadowPassword),
-      enabled: shadowPassword === undefined ? null : !/^!|^\*/.test(shadowPassword),
+      passwordLocked: passwordStatus?.locked ?? null,
+      enabled: passwordStatus?.enabled ?? null,
       isAdministrator: false,
       lastLogin: null,
-      passwordNeverExpires: shadow ? shadow.maximumDays === '' || Number(shadow.maximumDays) >= 99999 : null,
+      passwordNeverExpires: passwordStatus?.neverExpires ?? null,
     };
   });
 }
 
-function parseShadow(contents) {
-  return new Map(contents.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [name, password, , , maximumDays] = line.split(':');
-    return [name, { password, maximumDays }];
+export function parsePasswdStatus(output) {
+  const [name, status, , , maximumDays] = output.trim().split(/\s+/);
+  if (!name || !status) throw new Error('passwd -S returned an incomplete status record');
+  const normalizedStatus = status.toUpperCase();
+  const locked = ['L', 'LK'].includes(normalizedStatus);
+  const enabled = locked ? false : ['P', 'PS', 'NP'].includes(normalizedStatus) ? true : null;
+  const maximum = Number(maximumDays);
+  return {
+    name,
+    locked,
+    enabled,
+    neverExpires: maximumDays === '' || Number.isFinite(maximum) && (maximum < 0 || maximum >= 99999),
+  };
+}
+
+async function collectPasswdStatuses(userNames, run, signal) {
+  const records = await Promise.allSettled(userNames.map(async (name) => {
+    const output = await run('passwd', ['-S', name], { signal, timeoutMs: COMMAND_TIMEOUT_MS });
+    return parsePasswdStatus(output);
   }));
+  const statuses = new Map();
+  const failures = [];
+  let privilegeFailures = 0;
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record.status === 'fulfilled') statuses.set(record.value.name, record.value);
+    else {
+      const message = record.reason.message;
+      failures.push(`${userNames[index]}: ${message}`);
+      if (/permission denied|may not view or modify password information|exited with code 1/i.test(message)) privilegeFailures += 1;
+    }
+  }
+  const insufficientPrivilege = privilegeFailures > 0;
+  return {
+    statuses,
+    status: failures.length === 0 ? 'available' : insufficientPrivilege ? 'insufficient_privilege' : 'unavailable',
+    reasonCode: insufficientPrivilege ? 'insufficient_privilege' : failures.length > 0 ? 'command_unavailable' : null,
+    reason: failures.length > 0 ? `Password status unavailable for ${failures.length} account(s): ${failures.join('; ')}` : null,
+  };
 }
 
 function parseGroup(contents) {
@@ -62,27 +93,40 @@ function parseGroup(contents) {
   });
 }
 
-async function collectLinux({ readTextFile, signal }) {
+async function collectLinux({ readTextFile, run, signal }) {
   checkAborted(signal);
-  const [passwdResult, groupResult, shadowResult] = await Promise.allSettled([
+  const [passwdResult, groupResult] = await Promise.allSettled([
     readTextFile('/etc/passwd', 'utf8'),
     readTextFile('/etc/group', 'utf8'),
-    readTextFile('/etc/shadow', 'utf8'),
   ]);
   checkAborted(signal);
 
-  let shadowByName = null;
-  let shadowReason = null;
-  if (shadowResult.status === 'fulfilled') shadowByName = parseShadow(shadowResult.value);
-  else shadowReason = `Password status unavailable: ${shadowResult.reason.message}`;
+  const passwordState = passwdResult.status === 'fulfilled'
+    ? await collectPasswdStatuses(
+      passwdResult.value.split(/\r?\n/).filter(Boolean).map((line) => line.split(':', 1)[0]),
+      run,
+      signal,
+    )
+    : { statuses: null, status: 'unavailable', reasonCode: 'passwd_unavailable', reason: null };
+  checkAborted(signal);
 
   const parsedGroups = groupResult.status === 'fulfilled' ? parseGroup(groupResult.value) : null;
-  const parsedUsers = passwdResult.status === 'fulfilled' ? parsePasswd(passwdResult.value, shadowByName) : null;
+  const parsedUsers = passwdResult.status === 'fulfilled' ? parsePasswd(passwdResult.value, passwordState.statuses) : null;
   const privilegedGroups = (parsedGroups ?? []).filter((group) => /^(admin|wheel|sudo)$/i.test(group.name));
   const privilegedNames = new Set(privilegedGroups.flatMap((group) => group.members));
   const privilegedGids = new Set(privilegedGroups.map((group) => group.gid));
   for (const user of parsedUsers ?? []) user.isAdministrator = privilegedNames.has(user.name) || privilegedGids.has(user.primaryGroupId) || user.uid === 0;
-  const users = parsedUsers ? sourceResult(parsedUsers, '/etc/passwd', shadowReason) : unavailableSource('/etc/passwd', passwdResult.reason);
+  const users = parsedUsers
+    ? {
+      ...sourceResult(parsedUsers, '/etc/passwd + passwd -S', passwordState.reason),
+      accountStatus: passwordState.status,
+      reasonCode: passwordState.reasonCode,
+    }
+    : {
+      ...unavailableSource('/etc/passwd', passwdResult.reason),
+      accountStatus: 'unavailable',
+      reasonCode: 'passwd_unavailable',
+    };
   const groups = parsedGroups ? sourceResult(parsedGroups, '/etc/group') : unavailableSource('/etc/group', groupResult.reason);
   return { users, groups, privilegedGroups: privilegedGroups.map((group) => group.name) };
 }

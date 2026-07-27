@@ -6,6 +6,11 @@ import { CollectorRegistry } from '../core/collector-registry.js';
 import { HeartbeatScheduler, TaskPollScheduler, UploadScheduler } from '../core/scheduler.js';
 import { TaskRunner } from '../core/task-runner.js';
 import { ResultUploader } from '../transport/result-uploader.js';
+import { TaskEnvelopeVerifier } from '../task/envelope-verifier.js';
+import { TaskJournal } from '../task/task-journal.js';
+import { TaskRateTracker } from '../task/rate-tracker.js';
+
+const SHUTDOWN_GRACE_MS = 5000;
 
 async function writeStatus(statusPath, status) {
   await mkdir(path.dirname(statusPath), { recursive: true, mode: 0o700 });
@@ -33,6 +38,9 @@ export class AgentRuntime {
     version,
     registry,
     taskRunner,
+    taskEnvelopeVerifier,
+    taskJournal,
+    taskRateTracker,
     onResult,
     resultStore,
     resultUploader,
@@ -49,6 +57,12 @@ export class AgentRuntime {
     this.resultStore = resultStore;
     this.externalOnResult = onResult;
     this.registry = registry ?? new CollectorRegistry();
+    this.taskRateTracker = taskRateTracker ?? new TaskRateTracker(config.agent?.taskRateLimit);
+    this.taskJournal = taskJournal ?? new TaskJournal({
+      path: config.storage.taskJournalPath ?? 'var/task-journal.json',
+      logger,
+      cwd,
+    });
     const uploadConfig = config.collectors.upload;
     this.authFailureThreshold = uploadConfig.authFailureThreshold ?? 5;
     this.resultUploader = resultUploader ?? new ResultUploader({
@@ -64,10 +78,18 @@ export class AgentRuntime {
       logger,
       collectorConfig: config.collectors,
       onResult: (result) => this.#handleResult(result),
+      taskJournal: this.taskJournal,
+    });
+    this.taskEnvelopeVerifier = taskEnvelopeVerifier ?? new TaskEnvelopeVerifier({
+      identity,
+      ledgerPath: config.storage.taskReplayLedgerPath,
+      logger,
+      cwd,
     });
     this.health = {
       state: 'starting',
       agentId: identity.agentId,
+      tenantId: identity.tenantId,
       lastHeartbeatAt: null,
       lastHeartbeatError: null,
       lastPollAt: null,
@@ -85,6 +107,16 @@ export class AgentRuntime {
   }
 
   async start() {
+    const abandonedTasks = await this.taskJournal.initialize();
+    for (const task of abandonedTasks) {
+      this.logger.warn({
+        taskId: task.taskId,
+        collectorName: task.collectorName,
+        previousStatus: task.status,
+        acceptedAt: task.acceptedAt,
+        startedAt: task.startedAt ?? null,
+      }, 'Recovered abandoned task from previous agent process; task will not be re-executed');
+    }
     this.health.state = 'running';
     await this.#refreshQueueHealth();
     await this.#persistHealth();
@@ -99,7 +131,7 @@ export class AgentRuntime {
       ...schedulerOptions,
     });
     this.taskPollScheduler = new TaskPollScheduler({
-      pollTasks: () => this.#pollTasks(),
+      pollTasks: (signal) => this.#pollTasks(signal),
       intervalMs: this.config.agent.pollIntervalMs,
       ...schedulerOptions,
     });
@@ -116,11 +148,18 @@ export class AgentRuntime {
 
   async stop() {
     this.health.state = 'stopping';
-    await Promise.all([
+    const schedulerShutdown = Promise.all([
       this.heartbeatScheduler?.stop(),
       this.taskPollScheduler?.stop(),
       this.uploadScheduler?.stop(),
     ]);
+    let graceTimer;
+    const graceful = await Promise.race([
+      schedulerShutdown.then(() => true),
+      new Promise((resolve) => { graceTimer = setTimeout(() => resolve(false), SHUTDOWN_GRACE_MS); }),
+    ]);
+    clearTimeout(graceTimer);
+    if (!graceful) this.logger.warn({ gracePeriodMs: SHUTDOWN_GRACE_MS }, 'Agent shutdown grace period elapsed while operations were still stopping');
     this.health.state = 'stopped';
     await this.#persistHealth();
     this.logger.info('Agent runtime stopped');
@@ -172,18 +211,34 @@ export class AgentRuntime {
     }
   }
 
-  async #pollTasks() {
+  async #pollTasks(signal) {
     try {
-      const tasks = await this.apiClient.pollTasks(this.identity);
+      const polledTasks = await this.apiClient.pollTasks(this.identity);
+      const verifiedTasks = await this.taskEnvelopeVerifier.verifyAll(polledTasks);
+      const rateDecision = this.taskRateTracker.admit(verifiedTasks);
+      const tasks = rateDecision.accepted;
+      for (const rejection of rateDecision.rejected) {
+        this.logger.warn({
+          taskId: rejection.task.taskId,
+          collectorName: rejection.task.collectorName,
+          reasonCode: rejection.reasonCode,
+          reason: rejection.reason,
+          maxExecutions: rateDecision.maxExecutions,
+          windowMs: rateDecision.windowMs,
+        }, 'Rejected task due to cumulative execution rate limit');
+      }
       this.health.lastPollAt = new Date().toISOString();
       this.health.lastPollError = null;
       await this.#persistHealth();
       this.logger.info({
         agentId: this.identity.agentId,
         taskCount: tasks.length,
+        rejectedTaskCount: polledTasks.length - tasks.length,
+        invalidEnvelopeCount: polledTasks.length - verifiedTasks.length,
+        rateLimitedTaskCount: rateDecision.rejected.length,
         receivedAt: this.health.lastPollAt,
       }, tasks.length > 0 ? 'Received collector tasks' : 'Task poll completed with no tasks');
-      if (tasks.length > 0) await this.taskRunner.runAll(tasks);
+      if (tasks.length > 0) await this.taskRunner.runAll(tasks, { signal });
     } catch (error) {
       this.health.lastPollError = error.message;
       await this.#persistHealth();

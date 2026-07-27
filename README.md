@@ -185,10 +185,11 @@ When connected to the real central server, the dashboard also provides:
 
 The task form is disabled in mock mode. In real mode, clicking **Create Task** assigns the task to this agent; its normal poll scheduler receives it, the normal task runner executes it, and the normal encrypted upload pipeline returns the result. No curl command is required.
 
-Central-server admin routes require `ADMIN_TOKEN`. Start the central server and dashboard processes with the same persistent token. The dashboard config loader reads it from the process environment, keeps it server-side, redacts it from logs, and never sends it to browser JavaScript:
+Central-server admin routes require `ADMIN_TOKEN`. The central server also requires `TASK_SIGNING_SECRET`; it fails to start when this variable is absent and uses it only to derive per-agent HMAC task-signing keys. Start the central server and dashboard processes with the same persistent admin token. The dashboard config loader reads the admin token from the process environment, keeps it server-side, redacts it from logs, and never sends it to browser JavaScript:
 
 ```powershell
 $env:ADMIN_TOKEN = "replace-with-a-long-random-secret"
+$env:TASK_SIGNING_SECRET = "replace-with-a-separate-long-random-secret"
 npm.cmd --prefix .\central-management-server start
 ```
 

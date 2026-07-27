@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { AgentLifecycle } from '../../src/agent/lifecycle.js';
+import { signTaskEnvelope } from '../../src/security/task-envelope.js';
 import { ResultStore } from '../../src/storage/result-store.js';
+
+const ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
 
 const silentLogger = {
   info() {},
@@ -30,6 +33,7 @@ function createStore(directory, overrides = {}) {
     maxQueueItems: 100,
     maxItemAgeMs: 86400000,
     logger: silentLogger,
+    encryptionKey: ENCRYPTION_KEY,
     ...overrides,
   });
 }
@@ -72,6 +76,24 @@ test('enqueue and delivery-state transitions round trip durably', async () => {
     assert.equal(stats.deliveredCount, 1);
     assert.equal(stats.failedPermanentCount, 1);
     assert.equal(typeof stats.failedPermanentRetainUntil, 'string');
+  });
+});
+
+test('queue files contain only encrypted envelopes and survive process restart', async () => {
+  await withTempDirectory(async (directory) => {
+    const firstProcess = await createStore(directory).initialize();
+    const queued = await firstProcess.enqueue({ ...result(), data: { secretFinding: 'plaintext-must-not-appear' } });
+    const diskContent = await readFile(path.join(firstProcess.queueDir, `${queued.id}.json`), 'utf8');
+    const envelope = JSON.parse(diskContent);
+
+    assert.equal(envelope.algorithm, 'aes-256-gcm');
+    assert.equal(envelope.version, 1);
+    assert.equal(Object.hasOwn(envelope, 'result'), false);
+    assert.equal(diskContent.includes('plaintext-must-not-appear'), false);
+
+    const restarted = await createStore(directory).initialize();
+    const [restored] = await restarted.listPending();
+    assert.deepEqual(restored.result, queued.result);
   });
 });
 
@@ -202,6 +224,8 @@ test('queue directory and files use restrictive permissions where supported', as
 test('lifecycle task pipeline durably queues a collector result as pending', async () => {
   await withTempDirectory(async (directory) => {
     let deliveredTasks = false;
+    const taskSigningKey = Buffer.alloc(32, 8).toString('base64');
+    const taskSigningKeyId = 'integration-task-key';
     const config = {
       server: {
         mode: 'mock', registrationPath: '/register', heartbeatPath: '/heartbeat', tasksPath: '/tasks', resultsPath: '/results',
@@ -210,6 +234,7 @@ test('lifecycle task pipeline durably queues a collector result as pending', asy
       storage: {
         identityPath: path.join(directory, 'identity.json'),
         statusPath: path.join(directory, 'status.json'),
+        taskReplayLedgerPath: path.join(directory, 'task-replay.json'),
         queueDir: path.join(directory, 'queue'),
         maxQueueSizeBytes: 1024 * 1024,
         maxQueueItems: 100,
@@ -226,8 +251,11 @@ test('lifecycle task pipeline durably queues a collector result as pending', asy
       async loadIdentity() {
         return {
           agentId: 'integration-agent',
+          tenantId: 'integration-tenant',
           authToken: 'integration-token',
           encryptionKey: Buffer.alloc(32, 7).toString('base64'),
+          taskSigningKey,
+          taskSigningKeyId,
         };
       },
     };
@@ -237,7 +265,20 @@ test('lifecycle task pipeline durably queues a collector result as pending', asy
       async pollTasks() {
         if (deliveredTasks) return [];
         deliveredTasks = true;
-        return [{ taskId: 'integration-task', collectorName: 'noop', params: { integration: true } }];
+        const task = {
+          taskId: 'integration-task',
+          collectorName: 'noop',
+          params: { integration: true },
+          agentId: 'integration-agent',
+          tenantId: 'integration-tenant',
+          keyId: taskSigningKeyId,
+          issuedAt: new Date(Date.now() - 1_000).toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          nonce: 'integration-nonce',
+          sequence: 1,
+        };
+        task.signature = signTaskEnvelope(task, taskSigningKey);
+        return [task];
       },
     };
     const lifecycle = new AgentLifecycle({

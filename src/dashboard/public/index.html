@@ -43,8 +43,7 @@
       <h3>1. Local testing</h3><p>Keep <code>mock</code> mode. It needs no server or credentials. Run <code>scan os-info</code> in the terminal.</p>
       <h3>2. Real management server</h3><p>Select <code>http</code> and enter the server API URL. This local test server uses <code>http://127.0.0.1:8080</code>; every non-loopback deployment must use HTTPS, for example <code>https://manager.company.local</code>.</p>
       <h3>3. Credentials</h3><p>You do not paste an auth token here. On Start/Restart, registration receives the agent ID, auth token, and encryption key from the server and stores them in the OS keychain or restricted identity file.</p>
-      <h3>4. Network authorization</h3><p>Add only CIDRs you own or are authorized to test, one per line, such as <code>192.168.1.0/24</code>. Then Apply &amp; Restart before running <code>scan network-scan --target 192.168.1.10 --ports 22,80,443</code>.</p>
-      <h3>5. Dependency scanning</h3><p>Add project directories under SCA paths, one per line, such as <code>C:\Projects</code>. The agent never scans the whole disk by default.</p>
+      <h3>4. Dependency scanning</h3><p>Add project directories under SCA paths, one per line, such as <code>C:\Projects</code>. The agent never scans the whole disk by default.</p>
     </details>
     <h2>Lifecycle</h2>
     <div class="buttons"><button data-action="start" class="primary">Start</button><button data-action="stop" class="danger">Stop</button><button data-action="restart">Restart</button></div>
@@ -54,17 +53,14 @@
     <label for="serverMode">Server mode</label><select id="serverMode"><option value="mock">mock</option><option value="http">http</option></select>
     <div id="modeHelp" class="mode-help"></div>
     <label for="serverUrl">Server URL</label><input id="serverUrl" placeholder="https://management.example">
-    <label for="cidrs">Network allowlist CIDRs (one per line)</label><textarea id="cidrs" spellcheck="false"></textarea>
+
     <label for="paths">SCA scan paths (one per line)</label><textarea id="paths" spellcheck="false"></textarea>
     <div class="buttons config"><button id="apply" class="primary">Apply &amp; Restart Agent</button></div>
     <p class="hint">Changes are written to a restricted dashboard override. Security settings never hot-reload.</p>
     <h2>Create central-server task</h2>
     <section id="taskPanel" class="task-panel" aria-disabled="true">
       <label for="taskCollector">Collector</label><select id="taskCollector"></select>
-      <div id="taskRemoteFields" hidden>
-        <label for="taskTargets">Targets (comma-separated IPs/CIDRs)</label><input id="taskTargets" placeholder="192.168.1.10">
-        <label for="taskPorts">Ports (optional)</label><input id="taskPorts" placeholder="22,80,443">
-      </div>
+
       <div id="taskWarning" class="task-warning"></div>
       <div class="buttons config"><button id="createTask" class="primary">Create Task</button></div>
       <div id="taskResult" class="inline-result"></div>
@@ -83,7 +79,7 @@
   const terminal = document.querySelector('#terminal');
   const commandInput = document.querySelector('#command');
   const pausedBadge = document.querySelector('#paused');
-  const remoteCollectors = new Set(['network-scan','tls-checks']);
+
   let autoScroll = true, hovering = false, sequence = 0, currentConfig, configDirty = false;
   const history = []; let historyIndex = 0;
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -110,9 +106,9 @@
   }
   function populateCollectors(collectors){const selected=el('taskCollector').value;el('taskCollector').replaceChildren(...collectors.map(item=>{const option=document.createElement('option');option.value=item.name;option.textContent=item.warning?`${item.name} ⚠`:item.name;option.dataset.warning=item.warning||'';return option;}));if([...el('taskCollector').options].some(option=>option.value===selected))el('taskCollector').value=selected;updateTaskFields();}
   function updateTaskPanel(taskCreation){const enabled=Boolean(taskCreation?.enabled);el('taskPanel').setAttribute('aria-disabled',String(!enabled));el('createTask').disabled=!enabled;el('taskWarning').textContent=enabled?(el('taskCollector').selectedOptions[0]?.dataset.warning||''):(taskCreation?.reason||'Task creation requires a real connected server');}
-  function updateTaskFields(){const remote=remoteCollectors.has(el('taskCollector').value);el('taskRemoteFields').hidden=!remote;el('taskWarning').textContent=el('taskPanel').getAttribute('aria-disabled')==='true'?'Task creation requires a real connected server':(el('taskCollector').selectedOptions[0]?.dataset.warning||'');}
+  function updateTaskFields(){el('taskWarning').textContent=el('taskPanel').getAttribute('aria-disabled')==='true'?'Task creation requires a real connected server':(el('taskCollector').selectedOptions[0]?.dataset.warning||'');}
   function updateModeHelp(){el('modeHelp').innerHTML=el('serverMode').value==='mock'?'<strong>Mock:</strong> local demo mode; no real server or credentials required.':'<strong>HTTP:</strong> use http://127.0.0.1:8080 only for the local test server; non-loopback servers require https://. Registration supplies credentials automatically.';}
-  function setConfig(config, force=false) { if(configDirty&&!force)return; currentConfig=config; el('serverMode').value=config.server.mode; el('serverUrl').value=config.server.url; el('cidrs').value=config.networkScanAllowedCidrs.join('\n'); el('paths').value=config.scaDepsScanPaths.join('\n'); configDirty=false; updateModeHelp(); }
+  function setConfig(config, force=false) { if(configDirty&&!force)return; currentConfig=config; el('serverMode').value=config.server.mode; el('serverUrl').value=config.server.url; el('paths').value=config.scaDepsScanPaths.join('\n'); configDirty=false; updateModeHelp(); }
   function send(message) { socket.send(JSON.stringify({id:`ui-${++sequence}`,...message})); }
   socket.addEventListener('open',()=>{el('socketState').textContent='connected';document.querySelector('.dot').style.background='#51e39a';line('info','Dashboard WebSocket authenticated');});
   socket.addEventListener('close',()=>{el('socketState').textContent='disconnected';document.querySelector('.dot').style.background='#ff6b7a';line('error','Dashboard connection closed');});
@@ -121,9 +117,9 @@
   document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',()=>send({type:'lifecycle',action:button.dataset.action})));
   el('testConnection').addEventListener('click',()=>{el('connectionResult').textContent='Testing authenticated heartbeat…';send({type:'connection.test'});});
   el('taskCollector').addEventListener('change',updateTaskFields);
-  el('createTask').addEventListener('click',()=>{const targets=el('taskTargets').value.split(/\r?\n|,/).map(value=>value.trim()).filter(Boolean);const portText=el('taskPorts').value.trim();const task={collectorName:el('taskCollector').value};if(remoteCollectors.has(task.collectorName)){task.targets=targets;if(portText)task.ports=portText.split(',').map(value=>Number(value.trim()));}el('taskResult').textContent='Creating task on central server…';send({type:'task.create',task});});
-  ['serverMode','serverUrl','cidrs','paths'].forEach(id=>el(id).addEventListener('input',()=>{configDirty=true;if(id==='serverMode')updateModeHelp();}));
-  el('apply').addEventListener('click',()=>{const config={server:{mode:el('serverMode').value,url:el('serverUrl').value.trim()},networkScanAllowedCidrs:el('cidrs').value.split(/\r?\n|,/).map(v=>v.trim()).filter(Boolean),scaDepsScanPaths:el('paths').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)};send({type:'config.save',config});});
+  el('createTask').addEventListener('click',()=>{const task={collectorName:el('taskCollector').value};el('taskResult').textContent='Creating task on central server…';send({type:'task.create',task});});
+  ['serverMode','serverUrl','paths'].forEach(id=>el(id).addEventListener('input',()=>{configDirty=true;if(id==='serverMode')updateModeHelp();}));
+  el('apply').addEventListener('click',()=>{const config={server:{mode:el('serverMode').value,url:el('serverUrl').value.trim()},scaDepsScanPaths:el('paths').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)};send({type:'config.save',config});});
   terminal.addEventListener('mouseenter',()=>{hovering=true;pausedBadge.style.display='block'});terminal.addEventListener('mouseleave',()=>{hovering=false;pausedBadge.style.display=autoScroll?'none':'block';if(autoScroll)terminal.scrollTop=terminal.scrollHeight});terminal.addEventListener('scroll',()=>{const nearBottom=terminal.scrollHeight-terminal.scrollTop-terminal.clientHeight<35;autoScroll=nearBottom;pausedBadge.style.display=(!autoScroll||hovering)?'block':'none'});
 })();
 </script>
