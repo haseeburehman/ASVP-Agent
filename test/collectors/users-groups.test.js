@@ -20,6 +20,7 @@ test('Linux adapter parses passwd and group while tolerating unavailable passwd 
       '/etc/passwd': 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000:Alice:/home/alice:/bin/sh',
       '/etc/group': 'root:x:0:\nusers:x:1000:alice,bob',
     }),
+    readDirectory: async () => { const error = new Error('permission denied'); error.code = 'EACCES'; throw error; },
     runCommand: async (executable, args) => {
       calls.push([executable, args]);
       throw new Error('permission denied');
@@ -38,6 +39,10 @@ test('Linux adapter parses passwd and group while tolerating unavailable passwd 
   assert.equal(data.users.reasonCode, 'insufficient_privilege');
   assert.match(data.users.reason, /permission denied/);
   assert.deepEqual(data.groups.items[1], { name: 'users', gid: 1000, members: ['alice', 'bob'] });
+  assert.equal(data.adminMembership.status, 'available');
+  assert.deepEqual(data.adminMembership.items[1], { user: 'alice', sudo: false, wheel: false });
+  assert.equal(data.sudoersDropInFiles.status, 'insufficient_privilege');
+  assert.equal(data.sudoersDropInFiles.reasonCode, 'insufficient_privilege');
 });
 
 test('Linux adapter derives lock and expiry state from passwd status without credential files', async () => {
@@ -50,6 +55,7 @@ test('Linux adapter derives lock and expiry state from passwd status without cre
       if (filePath === '/etc/group') return '';
       throw new Error(`Unexpected file: ${filePath}`);
     },
+    readDirectory: async () => [],
     runCommand: async (executable, args) => {
       assert.equal(executable, 'passwd');
       assert.deepEqual(args.slice(0, 1), ['-S']);
@@ -71,6 +77,34 @@ test('Linux adapter derives lock and expiry state from passwd status without cre
   assert.equal(data.users.accountStatus, 'available');
   assert.equal(data.users.reasonCode, null);
   assert.equal(data.users.reason, null);
+  assert.equal(data.sudoersDropInFiles.status, 'available');
+});
+
+test('Linux adapter reports sudo and wheel membership and bounds sudoers file names', async () => {
+  const entries = Array.from({ length: 300 }, (_, index) => ({ name: `rule-${String(index).padStart(3, '0')}`, isFile: () => true }));
+  const collector = createUsersGroupsCollector({
+    platform: 'linux',
+    readTextFile: fileMock({
+      '/etc/passwd': 'alice:x:1000:10::/home/alice:/bin/sh\nbob:x:1001:20::/home/bob:/bin/sh',
+      '/etc/group': 'wheel:x:10:\nsudo:x:20:alice',
+    }),
+    readDirectory: async (directory, options) => {
+      assert.equal(directory, '/etc/sudoers.d');
+      assert.deepEqual(options, { withFileTypes: true });
+      return entries;
+    },
+    runCommand: async (_executable, args) => `${args[1]} P 2026-01-01 0 90 7 -1`,
+  });
+
+  const data = await collector.run();
+
+  assert.deepEqual(data.adminMembership.items, [
+    { user: 'alice', sudo: true, wheel: true },
+    { user: 'bob', sudo: true, wheel: false },
+  ]);
+  assert.equal(data.sudoersDropInFiles.items.length, 256);
+  assert.deepEqual(data.sudoersDropInFiles.items.slice(0, 2), ['rule-000', 'rule-001']);
+  assert.match(data.sudoersDropInFiles.reason, /limited to 256/);
 });
 
 test('passwd status parser consumes only non-secret account-state fields', () => {
@@ -90,6 +124,8 @@ test('Windows adapter uses one fixed non-interactive PowerShell script', async (
       assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
       assert.match(args[3], /Get-LocalUser/);
       assert.match(args[3], /Get-LocalGroupMember/);
+      assert.match(args[3], /Win32_Service/);
+      assert.match(args[3], /PrincipalSource -eq 'Local'/);
       assert.equal(args.length, 4);
       return JSON.stringify({
         Users: [{ Name: 'local-user', SID: 'S-1-5-21-1', Enabled: true, Description: 'Local user' }],
@@ -98,6 +134,11 @@ test('Windows adapter uses one fixed non-interactive PowerShell script', async (
           SID: 'S-1-5-32-544',
           Members: [{ Name: 'HOST\\local-user', SID: 'S-1-5-21-1', ObjectClass: 'User', PrincipalSource: 'Local' }],
         }],
+        Services: [
+          { Name: 'system-service', DisplayName: 'System service', StartName: 'LocalSystem', State: 'Running' },
+          { Name: 'user-service', DisplayName: 'User service', StartName: '.\\local-user', State: 'Stopped' },
+          { Name: 'limited-service', DisplayName: 'Limited service', StartName: 'NT AUTHORITY\\LocalService', State: 'Running' },
+        ],
       });
     },
   });
@@ -108,6 +149,9 @@ test('Windows adapter uses one fixed non-interactive PowerShell script', async (
   assert.equal(data.users.items[0].enabled, true);
   assert.equal(data.groups.items[0].name, 'Administrators');
   assert.equal(data.groups.items[0].members[0].principalSource, 'Local');
+  assert.deepEqual(data.adminMembership.items, [{ user: 'local-user', administrators: true }]);
+  assert.deepEqual(data.services.items.map((service) => service.runsAsPrivileged), [true, true, false]);
+  assert.equal(data.services.items[1].account, '.\\local-user');
 });
 
 test('macOS adapter uses fixed dscl commands and joins group memberships', async () => {
@@ -141,6 +185,28 @@ test('macOS adapter uses fixed dscl commands and joins group memberships', async
     passwordNeverExpires: null,
   });
   assert.deepEqual(data.groups.items[0], { name: 'staff', gid: 20, members: ['alice'] });
+  assert.deepEqual(data.adminMembership.items[1], { user: 'alice', admin: true, staff: true });
+  assert.equal(data.adminMembership.status, 'available');
+});
+
+test('macOS membership check reports insufficient privilege independently', async () => {
+  const collector = createUsersGroupsCollector({
+    platform: 'darwin',
+    runCommand: async (_executable, args) => {
+      if (args.at(-1) === 'UniqueID') return 'alice 501';
+      if (args.at(-1) === 'PrimaryGroupID') return 'staff 20';
+      const error = new Error('permission denied');
+      error.code = 'EACCES';
+      throw error;
+    },
+  });
+
+  const data = await collector.run();
+
+  assert.equal(data.users.items[0].isAdministrator, false);
+  assert.equal(data.adminMembership.status, 'insufficient_privilege');
+  assert.equal(data.adminMembership.reasonCode, 'insufficient_privilege');
+  assert.equal(data.groups.items[0].members.length, 0);
 });
 
 test('collector rejects an already-aborted run', async () => {

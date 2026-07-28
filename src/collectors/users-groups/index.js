@@ -1,7 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createAbortError, runBoundedCommand } from '../shared/exec-utils.js';
 
 const COMMAND_TIMEOUT_MS = 8000;
+const MAX_SUDOERS_DROP_INS = 256;
 
 function sourceResult(items, source, reason = null) {
   return { items, source, reason };
@@ -9,6 +10,22 @@ function sourceResult(items, source, reason = null) {
 
 function unavailableSource(source, error) {
   return sourceResult(null, source, `${source} enumeration failed: ${error.message}`);
+}
+
+function checkResult(items, source, status = 'available', reason = null) {
+  return {
+    items,
+    source,
+    status,
+    reasonCode: status === 'available' ? null : status,
+    reason,
+  };
+}
+
+function failedCheck(source, error) {
+  const insufficientPrivilege = /access (?:is )?denied|permission denied|not permitted|unauthorized|eperm|eacces/i.test(`${error.code ?? ''} ${error.message}`);
+  const status = insufficientPrivilege ? 'insufficient_privilege' : 'unavailable';
+  return checkResult(null, source, status, `${source} check failed: ${error.message}`);
 }
 
 function checkAborted(signal) {
@@ -93,7 +110,7 @@ function parseGroup(contents) {
   });
 }
 
-async function collectLinux({ readTextFile, run, signal }) {
+async function collectLinux({ readTextFile, readDirectory, run, signal }) {
   checkAborted(signal);
   const [passwdResult, groupResult] = await Promise.allSettled([
     readTextFile('/etc/passwd', 'utf8'),
@@ -128,14 +145,40 @@ async function collectLinux({ readTextFile, run, signal }) {
       reasonCode: 'passwd_unavailable',
     };
   const groups = parsedGroups ? sourceResult(parsedGroups, '/etc/group') : unavailableSource('/etc/group', groupResult.reason);
-  return { users, groups, privilegedGroups: privilegedGroups.map((group) => group.name) };
+  const adminMembership = parsedUsers && parsedGroups
+    ? checkResult(parsedUsers.map((user) => ({
+      user: user.name,
+      sudo: privilegedGroups.some((group) => group.name.toLowerCase() === 'sudo' && (group.members.includes(user.name) || group.gid === user.primaryGroupId)),
+      wheel: privilegedGroups.some((group) => group.name.toLowerCase() === 'wheel' && (group.members.includes(user.name) || group.gid === user.primaryGroupId)),
+    })), '/etc/group')
+    : failedCheck('/etc/group', groupResult.status === 'rejected' ? groupResult.reason : passwdResult.reason);
+
+  let sudoersDropInFiles;
+  try {
+    const entries = await readDirectory('/etc/sudoers.d', { withFileTypes: true });
+    const names = entries.filter((entry) => entry.isFile()).map((entry) => entry.name).sort().slice(0, MAX_SUDOERS_DROP_INS);
+    sudoersDropInFiles = checkResult(names, '/etc/sudoers.d directory entries');
+    if (entries.filter((entry) => entry.isFile()).length > MAX_SUDOERS_DROP_INS) {
+      sudoersDropInFiles.reason = `Results limited to ${MAX_SUDOERS_DROP_INS} file names`;
+    }
+  } catch (error) {
+    sudoersDropInFiles = failedCheck('/etc/sudoers.d directory entries', error);
+  }
+  return {
+    users,
+    groups,
+    privilegedGroups: privilegedGroups.map((group) => group.name),
+    adminMembership,
+    sudoersDropInFiles,
+  };
 }
 
 async function collectWindows({ run, signal }) {
   const script = [
-    "$users=@(Get-LocalUser | Select-Object Name,SID,Enabled,Description,LastLogon,PasswordRequired,PasswordExpires,@{Name='PasswordNeverExpires';Expression={$null -eq $_.PasswordExpires}});",
-    "$groups=@(Get-LocalGroup | ForEach-Object {$g=$_; $members=@(Get-LocalGroupMember -Group $g -ErrorAction SilentlyContinue | Select-Object Name,SID,ObjectClass,PrincipalSource); [PSCustomObject]@{Name=$g.Name;SID=$g.SID.Value;Description=$g.Description;Members=$members}});",
-    "[PSCustomObject]@{Users=$users;Groups=$groups} | ConvertTo-Json -Compress -Depth 5",
+    "$users=@(Get-LocalUser -ErrorAction Stop | Select-Object Name,SID,Enabled,Description,LastLogon,PasswordRequired,PasswordExpires,@{Name='PasswordNeverExpires';Expression={$null -eq $_.PasswordExpires}});",
+    "$groupError=$null; try {$groups=@(Get-LocalGroup -ErrorAction Stop | ForEach-Object {$g=$_; $members=@(Get-LocalGroupMember -Group $g -ErrorAction Stop | Where-Object {$_.PrincipalSource -eq 'Local'} | Select-Object Name,SID,ObjectClass,PrincipalSource); [PSCustomObject]@{Name=$g.Name;SID=$g.SID.Value;Description=$g.Description;Members=$members}})} catch {$groups=@();$groupError=$_.Exception.Message};",
+    "$serviceError=$null; try {$services=@(Get-CimInstance Win32_Service -ErrorAction Stop | Select-Object Name,DisplayName,StartName,State)} catch {$services=@();$serviceError=$_.Exception.Message};",
+    "[PSCustomObject]@{Users=$users;Groups=$groups;GroupError=$groupError;Services=$services;ServiceError=$serviceError} | ConvertTo-Json -Compress -Depth 5",
   ].join(' ');
   try {
     const output = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
@@ -144,7 +187,14 @@ async function collectWindows({ run, signal }) {
     });
     const data = output ? JSON.parse(output) : { Users: [], Groups: [] };
     const administratorNames = new Set((data.Groups ?? []).filter((group) => /^(administrators|admin)$/i.test(group.Name)).flatMap((group) => (group.Members ?? []).map((member) => member.Name)));
-        const users = (data.Users ?? []).map((user) => ({
+    const isAdministratorName = (name) => {
+      const normalized = name?.toLowerCase();
+      return normalized ? [...administratorNames].some((administrator) => {
+        const candidate = administrator.toLowerCase();
+        return candidate === normalized || candidate.endsWith(`\\${normalized}`);
+      }) : false;
+    };
+    const users = (data.Users ?? []).map((user) => ({
       name: user.Name,
       sid: user.SID?.Value ?? user.SID ?? null,
       enabled: user.Enabled ?? null,
@@ -153,7 +203,7 @@ async function collectWindows({ run, signal }) {
       passwordRequired: user.PasswordRequired ?? null,
       passwordExpires: user.PasswordExpires || null,
       passwordNeverExpires: user.PasswordNeverExpires ?? null,
-      isAdministrator: [...administratorNames].some((name) => name === user.Name || name.endsWith(`\\${user.Name}`)),
+      isAdministrator: isAdministratorName(user.Name),
     }));
     const groups = (data.Groups ?? []).map((group) => ({
       name: group.Name,
@@ -166,16 +216,39 @@ async function collectWindows({ run, signal }) {
         principalSource: member.PrincipalSource || null,
       })),
     }));
+    const groupError = data.GroupError ? new Error(data.GroupError) : null;
+    const serviceError = data.ServiceError ? new Error(data.ServiceError) : null;
+    const adminMembership = groupError
+      ? failedCheck('powershell-get-localgroupmember', groupError)
+      : checkResult(users.map((user) => ({ user: user.name, administrators: user.isAdministrator })), 'powershell-get-localgroupmember');
+    const services = serviceError
+      ? failedCheck('cim-win32-service', serviceError)
+      : checkResult((data.Services ?? []).map((service) => {
+        const account = service.StartName || null;
+        const normalizedAccount = account?.replace(/^\.\\/, '').toLowerCase() ?? null;
+        return {
+          name: service.Name,
+          displayName: service.DisplayName || null,
+          account,
+          state: service.State || null,
+          runsAsPrivileged: normalizedAccount === 'localsystem' || normalizedAccount === 'system' || (normalizedAccount ? isAdministratorName(normalizedAccount) : false),
+        };
+      }), 'cim-win32-service');
     return {
       users: sourceResult(users, 'powershell-get-localuser'),
-      groups: sourceResult(groups, 'powershell-get-localgroup'),
+      groups: groupError ? unavailableSource('powershell-get-localgroup', groupError) : sourceResult(groups, 'powershell-get-localgroup'),
       privilegedGroups: groups.filter((group) => /^(administrators|admin)$/i.test(group.name)).map((group) => group.name),
+      adminMembership,
+      services,
     };
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     return {
       users: unavailableSource('powershell-get-localuser', error),
       groups: unavailableSource('powershell-get-localgroup', error),
+      privilegedGroups: [],
+      adminMembership: failedCheck('powershell-get-localgroupmember', error),
+      services: failedCheck('cim-win32-service', error),
     };
   }
 }
@@ -197,47 +270,53 @@ function parseDsclMemberships(output) {
 }
 
 async function collectMacOs({ run, signal }) {
-  try {
-    const [userOutput, groupOutput, membershipOutput] = await Promise.all([
-      run('/usr/bin/dscl', ['.', '-list', '/Users', 'UniqueID'], { signal, timeoutMs: COMMAND_TIMEOUT_MS }),
-      run('/usr/bin/dscl', ['.', '-list', '/Groups', 'PrimaryGroupID'], { signal, timeoutMs: COMMAND_TIMEOUT_MS }),
-      run('/usr/bin/dscl', ['.', '-list', '/Groups', 'GroupMembership'], { signal, timeoutMs: COMMAND_TIMEOUT_MS }),
-    ]);
-    const memberships = parseDsclMemberships(membershipOutput);
-    return {
-      users: sourceResult(parseDsclList(userOutput, 'uid').map((user) => ({
-        ...user,
-        enabled: null,
-        isAdministrator: ['admin', 'wheel'].some((group) => (memberships.get(group) ?? []).includes(user.name)) || user.uid === 0,
-        lastLogin: null,
-        passwordNeverExpires: null,
-      })), 'dscl-local-users'),
-      groups: sourceResult(parseDsclList(groupOutput, 'gid').map((group) => ({
-        ...group,
-        members: memberships.get(group.name) ?? [],
-      })), 'dscl-local-groups'),
-      privilegedGroups: ['admin', 'wheel'].filter((group) => memberships.has(group)),
-    };
-  } catch (error) {
-    if (error.name === 'AbortError') throw error;
-    return {
-      users: unavailableSource('dscl-local-users', error),
-      groups: unavailableSource('dscl-local-groups', error),
-    };
+  const results = await Promise.allSettled([
+    run('/usr/bin/dscl', ['.', '-list', '/Users', 'UniqueID'], { signal, timeoutMs: COMMAND_TIMEOUT_MS }),
+    run('/usr/bin/dscl', ['.', '-list', '/Groups', 'PrimaryGroupID'], { signal, timeoutMs: COMMAND_TIMEOUT_MS }),
+    run('/usr/bin/dscl', ['.', '-list', '/Groups', 'GroupMembership'], { signal, timeoutMs: COMMAND_TIMEOUT_MS }),
+  ]);
+  for (const result of results) {
+    if (result.status === 'rejected' && result.reason.name === 'AbortError') throw result.reason;
   }
+  const [userResult, groupResult, membershipResult] = results;
+  const parsedUsers = userResult.status === 'fulfilled' ? parseDsclList(userResult.value, 'uid') : null;
+  const memberships = membershipResult.status === 'fulfilled' ? parseDsclMemberships(membershipResult.value) : null;
+  const users = parsedUsers?.map((user) => ({
+    ...user,
+    enabled: null,
+    isAdministrator: (memberships?.get('admin') ?? []).includes(user.name) || user.uid === 0,
+    lastLogin: null,
+    passwordNeverExpires: null,
+  })) ?? null;
+  const adminMembership = parsedUsers && memberships
+    ? checkResult(parsedUsers.map((user) => ({
+      user: user.name,
+      admin: (memberships.get('admin') ?? []).includes(user.name) || user.uid === 0,
+      staff: (memberships.get('staff') ?? []).includes(user.name),
+    })), 'dscl-local-group-membership')
+    : failedCheck('dscl-local-group-membership', membershipResult.status === 'rejected' ? membershipResult.reason : userResult.reason);
+  return {
+    users: users ? sourceResult(users, 'dscl-local-users') : unavailableSource('dscl-local-users', userResult.reason),
+    groups: groupResult.status === 'fulfilled'
+      ? sourceResult(parseDsclList(groupResult.value, 'gid').map((group) => ({ ...group, members: memberships?.get(group.name) ?? [] })), 'dscl-local-groups')
+      : unavailableSource('dscl-local-groups', groupResult.reason),
+    privilegedGroups: memberships ? ['admin', 'staff'].filter((group) => memberships.has(group)) : [],
+    adminMembership,
+  };
 }
 
 export function createUsersGroupsCollector({
   platform = process.platform,
   runCommand = runBoundedCommand,
   readTextFile = readFile,
+  readDirectory = readdir,
 } = {}) {
   return {
     name: 'users-groups',
     version: '1.0.0',
     async run(_params = {}, context = {}) {
       checkAborted(context.signal);
-      const dependencies = { run: runCommand, readTextFile, signal: context.signal };
+      const dependencies = { run: runCommand, readTextFile, readDirectory, signal: context.signal };
       let data;
       if (platform === 'linux') data = await collectLinux(dependencies);
       else if (platform === 'win32') data = await collectWindows(dependencies);

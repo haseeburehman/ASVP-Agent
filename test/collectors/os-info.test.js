@@ -71,12 +71,18 @@ test('isolated Windows patch check normalizes mocked Get-HotFix output', async (
 
   assert.deepEqual(patches, {
     items: [{
+      identifier: 'KB5000001',
+      installedAt: '2026-01-02',
+      classification: 'Security Update',
+      classificationAvailable: true,
       hotfixId: 'KB5000001',
       description: 'Security Update',
       installedOn: '2026-01-02',
     }],
     source: 'powershell-get-hotfix',
     reason: null,
+    totalCount: 1,
+    mostRecentInstalledAt: '2026-01-02',
   });
 });
 
@@ -92,8 +98,51 @@ test('isolated Linux patch check reports unavailable sources without throwing', 
 
   assert.equal(patches.items, null);
   assert.equal(patches.source, null);
+  assert.equal(patches.totalCount, null);
+  assert.equal(patches.mostRecentInstalledAt, null);
   assert.match(patches.reason, /elevated privileges/);
   assert.match(patches.reason, /EACCES/);
+});
+
+test('Linux patch entries expose identifiers and explicit unavailable classification', async () => {
+  const patches = await collectInstalledPatches('linux', {
+    maxItems: 1,
+    readTextFile: async (filePath) => {
+      if (filePath !== '/var/log/dpkg.log') throw new Error('unexpected source');
+      return [
+        '2026-01-01 09:00:00 upgrade openssl:amd64 3.0.1 3.0.2',
+        '2026-02-03 10:11:12 upgrade curl:amd64 8.0.0 8.1.0',
+      ].join('\n');
+    },
+  });
+
+  assert.equal(patches.totalCount, 2);
+  assert.equal(patches.items.length, 1);
+  assert.equal(patches.mostRecentInstalledAt, '2026-02-03T10:11:12');
+  assert.deepEqual(patches.items[0], {
+    identifier: 'curl:amd64',
+    installedAt: '2026-02-03T10:11:12',
+    name: 'curl:amd64',
+    previousVersion: '8.0.0',
+    installedVersion: '8.1.0',
+    classification: null,
+    classificationAvailable: false,
+  });
+});
+
+test('Windows patch cap preserves total count and derives the most recent install date before truncation', async () => {
+  const patches = await collectInstalledPatches('win32', {
+    maxItems: 1,
+    runCommand: async () => JSON.stringify([
+      { HotFixID: 'KB1', Description: null, InstalledOn: '2026-03-04' },
+      { HotFixID: 'KB2', Description: 'Update', InstalledOn: '2026-02-01' },
+    ]),
+  });
+
+  assert.equal(patches.totalCount, 2);
+  assert.equal(patches.items.length, 1);
+  assert.equal(patches.items[0].identifier, 'KB2');
+  assert.equal(patches.mostRecentInstalledAt, '2026-03-04');
 });
 
 test('real os-info collector produces the normalized result shape', async () => {
@@ -119,4 +168,6 @@ test('real os-info collector produces the normalized result shape', async () => 
   assert.equal(typeof result.data.patches, 'object');
   assert.ok(Array.isArray(result.data.patches.items) || result.data.patches.items === null);
   assert.ok(result.data.patches.reason === null || typeof result.data.patches.reason === 'string');
+  assert.ok(result.data.patches.totalCount === null || Number.isInteger(result.data.patches.totalCount));
+  assert.ok(result.data.patches.mostRecentInstalledAt === null || typeof result.data.patches.mostRecentInstalledAt === 'string');
 });

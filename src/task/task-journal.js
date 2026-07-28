@@ -74,7 +74,7 @@ export class TaskJournal {
     this.operationChain = Promise.resolve();
   }
 
-  initialize() {
+  initialize({ resultQueueItems = [] } = {}) {
     return this.#serialize(async () => {
       await mkdir(path.dirname(this.path), { recursive: true, mode: 0o700 });
       await chmod(path.dirname(this.path), 0o700).catch((error) => {
@@ -89,22 +89,48 @@ export class TaskJournal {
         this.entries = [];
       }
 
-      const abandoned = this.entries.filter((entry) => ACTIVE_STATUSES.has(entry.status)).map((entry) => ({ ...entry }));
+      const resultsByTaskId = new Map();
+      for (const item of resultQueueItems) {
+        if (typeof item?.taskId !== 'string' || resultsByTaskId.has(item.taskId)) continue;
+        resultsByTaskId.set(item.taskId, item);
+      }
+      const abandoned = this.entries.filter((entry) => ACTIVE_STATUSES.has(entry.status)).map((entry) => {
+        const queueItem = resultsByTaskId.get(entry.taskId);
+        const reconciledStatus = queueItem
+          ? queueItem.resultStatus === 'success' ? 'completed' : 'failed'
+          : 'interrupted';
+        return {
+          ...entry,
+          reconciledStatus,
+          resultQueueItemId: queueItem?.id ?? null,
+          resultQueueState: queueItem?.state ?? null,
+        };
+      });
       const recoveredAt = this.#timestamp();
       if (abandoned.length > 0) {
-        const abandonedIds = new Set(abandoned.map((entry) => entry.taskId));
-        this.entries = this.entries.map((entry) => abandonedIds.has(entry.taskId) ? {
-          ...entry,
-          status: 'interrupted',
-          finishedAt: recoveredAt,
-          reason: CRASH_RECOVERY_REASON,
-        } : entry);
+        const recoveryByTaskId = new Map(abandoned.map((entry) => [entry.taskId, entry]));
+        this.entries = this.entries.map((entry) => {
+          const recovery = recoveryByTaskId.get(entry.taskId);
+          if (!recovery) return entry;
+          return {
+            ...entry,
+            status: recovery.reconciledStatus,
+            finishedAt: recoveredAt,
+            reason: recovery.resultQueueItemId
+              ? `Reconciled with durable result queue item ${recovery.resultQueueItemId} during crash recovery`
+              : CRASH_RECOVERY_REASON,
+          };
+        });
       }
       const pruned = this.#prune();
       if (abandoned.length > 0 || pruned || !(await this.#exists())) await this.#persist();
       this.initialized = true;
       return abandoned;
     }, false);
+  }
+
+  listEntries() {
+    return this.#serialize(async () => this.entries.map((entry) => ({ ...entry })));
   }
 
   accept(task) {

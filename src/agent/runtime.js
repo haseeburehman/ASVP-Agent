@@ -107,16 +107,53 @@ export class AgentRuntime {
   }
 
   async start() {
-    const abandonedTasks = await this.taskJournal.initialize();
+    const [replayClaims, resultQueueItems] = await Promise.all([
+      this.taskEnvelopeVerifier.listReplayClaims?.() ?? [],
+      this.resultStore?.listForStartupReconciliation?.() ?? [],
+    ]);
+    const abandonedTasks = await this.taskJournal.initialize({ resultQueueItems });
+    const journalEntries = await this.taskJournal.listEntries();
+    const journalTaskIds = new Set(journalEntries.map((entry) => entry.taskId));
+    const replayTaskIds = new Set(replayClaims.map((claim) => claim.taskId).filter(Boolean));
+
     for (const task of abandonedTasks) {
       this.logger.warn({
         taskId: task.taskId,
         collectorName: task.collectorName,
         previousStatus: task.status,
+        reconciledStatus: task.reconciledStatus,
+        resultQueueItemId: task.resultQueueItemId,
+        resultQueueState: task.resultQueueState,
         acceptedAt: task.acceptedAt,
         startedAt: task.startedAt ?? null,
-      }, 'Recovered abandoned task from previous agent process; task will not be re-executed');
+      }, task.resultQueueItemId
+        ? 'Reconciled abandoned task with its durable result; task will not be re-executed'
+        : 'Recovered abandoned task from previous agent process; task will not be re-executed');
     }
+    for (const claim of replayClaims) {
+      if (!claim.taskId || journalTaskIds.has(claim.taskId)) continue;
+      this.logger.warn({
+        taskId: claim.taskId,
+        collectorName: claim.collectorName ?? null,
+        sequence: claim.sequence,
+      }, 'Found durable replay claim without a task journal entry; task will not be re-executed');
+    }
+    for (const item of resultQueueItems) {
+      if (journalTaskIds.has(item.taskId) || replayTaskIds.has(item.taskId)) continue;
+      this.logger.warn({
+        taskId: item.taskId,
+        collectorName: item.collectorName,
+        queueItemId: item.id,
+        queueState: item.state,
+        resultStatus: item.resultStatus,
+      }, 'Found durable result without replay or journal state; result remains queued and task will not be re-executed');
+    }
+    this.logger.info({
+      replayClaimCount: replayClaims.length,
+      journalEntryCount: journalEntries.length,
+      resultQueueItemCount: resultQueueItems.length,
+      recoveredTaskCount: abandonedTasks.length,
+    }, 'Startup task state reconciliation completed');
     this.health.state = 'running';
     await this.#refreshQueueHealth();
     await this.#persistHealth();

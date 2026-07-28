@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { verifyTaskEnvelopeSignature } from '../security/task-envelope.js';
 
@@ -16,12 +16,39 @@ async function readLedger(ledgerPath) {
   }
 }
 
+async function syncDirectory(directory) {
+  let handle;
+  try {
+    handle = await open(directory, 'r');
+    await handle.sync();
+  } catch (error) {
+    if (process.platform !== 'win32') throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
 async function writeLedger(ledgerPath, entries) {
-  await mkdir(path.dirname(ledgerPath), { recursive: true, mode: 0o700 });
+  const directory = path.dirname(ledgerPath);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporaryPath = `${ledgerPath}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify({ entries }, null, 2)}\n`, { mode: 0o600 });
-  if (process.platform === 'win32') await rm(ledgerPath, { force: true });
-  await rename(temporaryPath, ledgerPath);
+  let handle;
+  try {
+    handle = await open(temporaryPath, 'wx', 0o600);
+    await handle.writeFile(`${JSON.stringify({ entries }, null, 2)}\n`, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await rename(temporaryPath, ledgerPath);
+    await chmod(ledgerPath, 0o600).catch((error) => {
+      if (process.platform !== 'win32') throw error;
+    });
+    await syncDirectory(directory);
+  } catch (error) {
+    await handle?.close().catch(() => {});
+    await rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 function parseTimestamp(value, name) {
@@ -43,6 +70,17 @@ export class TaskEnvelopeVerifier {
 
   verifyAll(tasks) {
     const run = this.operation.then(() => this.#verifyAll(tasks));
+    this.operation = run.catch(() => {});
+    return run;
+  }
+
+  listReplayClaims() {
+    const run = this.operation.then(async () => {
+      const now = this.clock();
+      return (await readLedger(this.ledgerPath))
+        .filter((entry) => Number.isFinite(entry.expiresAt) && entry.expiresAt + this.clockSkewMs >= now)
+        .map((entry) => ({ ...entry }));
+    });
     this.operation = run.catch(() => {});
     return run;
   }
@@ -89,6 +127,13 @@ export class TaskEnvelopeVerifier {
     if (entries.some((entry) => entry.keyId === task.keyId && entry.nonce === task.nonce)) throw new Error('task nonce was already accepted');
     if (entries.some((entry) => entry.keyId === task.keyId && entry.sequence === task.sequence)) throw new Error('task sequence was already accepted');
 
-    return { keyId: task.keyId, nonce: task.nonce, sequence: task.sequence, expiresAt };
+    return {
+      taskId: task.taskId,
+      collectorName: task.collectorName,
+      keyId: task.keyId,
+      nonce: task.nonce,
+      sequence: task.sequence,
+      expiresAt,
+    };
   }
 }

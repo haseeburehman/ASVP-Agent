@@ -97,6 +97,23 @@ test('queue files contain only encrypted envelopes and survive process restart',
   });
 });
 
+test('exposes result metadata for startup reconciliation without changing queue state', async () => {
+  await withTempDirectory(async (directory) => {
+    const store = await createStore(directory).initialize();
+    const queued = await store.enqueue(result());
+
+    assert.deepEqual(await store.listForStartupReconciliation(), [{
+      id: queued.id,
+      state: 'pending',
+      enqueuedAt: queued.enqueuedAt,
+      taskId: 'task-1',
+      collectorName: 'noop',
+      resultStatus: 'success',
+    }]);
+    assert.equal((await store.listPending()).length, 1);
+  });
+});
+
 test('startup recovery changes persisted in-flight items back to pending', async () => {
   await withTempDirectory(async (directory) => {
     const firstProcess = await createStore(directory).initialize();

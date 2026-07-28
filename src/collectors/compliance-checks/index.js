@@ -31,6 +31,259 @@ function notApplicable(reason, extra = {}) {
   return { status: 'not-applicable', value: null, reason, ...extra };
 }
 
+const PART_TWO_MAX_OUTPUT_BYTES = 256 * 1024;
+
+function privilegeFailure(error) {
+  return error?.code === 'EACCES'
+    || error?.code === 'EPERM'
+    || /access (?:is )?denied|permission denied|not permitted|requires? (?:administrator|root)|insufficient privilege/i.test(error?.message ?? '');
+}
+
+function posture(value, source) {
+  return { status: 'available', value, reasonCode: null, reason: null, source };
+}
+
+function postureFailure(error, source, subject) {
+  const status = privilegeFailure(error) ? 'insufficient_privilege' : 'unavailable';
+  return {
+    status,
+    value: null,
+    reasonCode: status,
+    reason: `${subject} is ${status === 'insufficient_privilege' ? 'not accessible with current privileges' : 'unavailable'}: ${error.message}`,
+    source,
+  };
+}
+
+async function fixedCommand(options, executable, args, parser, source, subject) {
+  try {
+    const output = await options.runCommand(executable, args, {
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      maxOutputBytes: PART_TWO_MAX_OUTPUT_BYTES,
+    });
+    return posture(parser(output), source);
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    return postureFailure(error, source, subject);
+  }
+}
+
+async function fixedRead(options, filePath, parser, subject) {
+  try {
+    checkAbort(options.signal);
+    const output = await options.readTextFile(filePath, 'utf8');
+    if (Buffer.byteLength(output) > PART_TWO_MAX_OUTPUT_BYTES) {
+      const error = new Error(`file exceeded the ${PART_TWO_MAX_OUTPUT_BYTES}-byte safety limit`);
+      error.code = 'FILE_OUTPUT_LIMIT';
+      throw error;
+    }
+    return posture(parser(output), filePath);
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    return postureFailure(error, filePath, subject);
+  }
+}
+
+function integer(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function parseLoginDefs(output) {
+  const values = {};
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE|PASS_MIN_LEN)\s+(\d+)/);
+    if (match) values[match[1]] = integer(match[2]);
+  }
+  if (Object.keys(values).length === 0) throw new Error('login.defs contained no password policy values');
+  return {
+    maximumAgeDays: values.PASS_MAX_DAYS ?? null,
+    minimumAgeDays: values.PASS_MIN_DAYS ?? null,
+    warningAgeDays: values.PASS_WARN_AGE ?? null,
+    minimumLength: values.PASS_MIN_LEN ?? null,
+  };
+}
+
+export function parseWindowsPasswordPolicy(output) {
+  const parsed = JSON.parse(output);
+  if (parsed.minimumLength == null && parsed.complexityEnabled == null && parsed.maximumAgeDays == null) {
+    throw new Error('local security policy contained no password policy values');
+  }
+  return parsed;
+}
+
+export function parsePamLockout(output) {
+  const lines = output.split(/\r?\n/).map((item) => stripComment(item).trim());
+  const faillockLine = lines.find((item) => /\bpam_faillock\.so\b/i.test(item));
+  const tallyLine = lines.find((item) => /\bpam_tally2\.so\b/i.test(item));
+  const line = faillockLine ?? tallyLine;
+  if (!line) throw new Error('PAM authentication stack contained no pam_faillock or pam_tally2 rule');
+  const moduleName = faillockLine ? 'pam_faillock' : 'pam_tally2';
+  const option = (name) => {
+    const match = line.match(new RegExp(`(?:^|\\s)${name}=(\\d+)(?=\\s|$)`, 'i'));
+    return match ? integer(match[1]) : null;
+  };
+  return {
+    lockoutEnabled: true,
+    failureThreshold: option('deny'),
+    failureWindowSeconds: moduleName === 'pam_faillock' ? option('fail_interval') : null,
+    unlockAfterSeconds: option('unlock_time'),
+    module: moduleName,
+    configuredLine: line,
+  };
+}
+
+export function parseMacLockoutPolicy(output) {
+  const value = (names) => {
+    for (const name of names) {
+      const match = output.match(new RegExp(`(?:<key>\\s*${name}\\s*</key>\\s*<integer>|\\b${name}\\s*[=:]\\s*)(\\d+)`, 'i'));
+      if (match) return integer(match[1]);
+    }
+    return null;
+  };
+  const failureThreshold = value(['maxFailedLoginAttempts', 'policyAttributeMaximumFailedAuthentications']);
+  const resetMinutes = value(['minutesUntilFailedLoginReset', 'policyAttributeMinutesUntilFailedAuthenticationReset']);
+  const unlockAfterSeconds = value(['autoEnableInSeconds', 'policyAttributeAutoEnableInSeconds']);
+  if (failureThreshold == null) throw new Error('pwpolicy output contained no reliable account lockout keys');
+  return {
+    lockoutEnabled: failureThreshold > 0,
+    failureThreshold,
+    failureWindowSeconds: resetMinutes == null ? null : resetMinutes * 60,
+    unlockAfterSeconds,
+  };
+}
+
+export function parsePwQuality(output) {
+  const values = {};
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*(minlen|dcredit|ucredit|lcredit|ocredit)\s*=\s*(-?\d+)/i);
+    if (match) values[match[1].toLowerCase()] = integer(match[2]);
+  }
+  return {
+    minimumLength: values.minlen ?? null,
+    digitCredit: values.dcredit ?? null,
+    uppercaseCredit: values.ucredit ?? null,
+    lowercaseCredit: values.lcredit ?? null,
+    otherCredit: values.ocredit ?? null,
+  };
+}
+
+function parseJson(output) {
+  return JSON.parse(output);
+}
+
+function combinePostures(results, source, subject, value) {
+  const privilege = results.find((result) => result.status === 'insufficient_privilege');
+  if (privilege) return postureFailure(Object.assign(new Error(privilege.reason), { code: 'EACCES' }), source, subject);
+  if (results.every((result) => result.status === 'unavailable')) {
+    return { status: 'unavailable', value: null, reasonCode: 'unavailable', reason: `${subject} is unavailable: ${results.map((result) => result.reason).join('; ')}`, source };
+  }
+  return posture(value(results), source);
+}
+
+async function collectWindowsPartTwo(options) {
+  const powerShell = (script, parser, source, subject) => fixedCommand(
+    options,
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    parser,
+    source,
+    subject,
+  );
+  const screenScript = "$policy='HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Control Panel\\Desktop';$user='HKCU:\\Control Panel\\Desktop';$p=if(Test-Path $policy){Get-ItemProperty $policy}else{Get-ItemProperty $user};[pscustomobject]@{enabled=$p.ScreenSaveActive -eq '1';passwordOnResume=$p.ScreenSaverIsSecure -eq '1';timeoutSeconds=[int]$p.ScreenSaveTimeOut;scope=if(Test-Path $policy){'machine-policy'}else{'service-account-user'}}|ConvertTo-Json -Compress";
+  const passwordScript = "$f=Join-Path ([IO.Path]::GetTempPath()) ('asvp-secpol-'+[guid]::NewGuid()+'.inf');try{secedit.exe /export /cfg $f /areas SECURITYPOLICY|Out-Null;$v=@{};Get-Content $f|ForEach-Object{if($_ -match '^([^;][^=]+)=(.*)$'){$v[$matches[1].Trim()]=$matches[2].Trim()}};$threshold=if($null -eq $v.LockoutBadCount){$null}else{[int]$v.LockoutBadCount};$duration=if($null -eq $v.LockoutDuration){$null}else{[int]$v.LockoutDuration};$reset=if($null -eq $v.ResetLockoutCount){$null}else{[int]$v.ResetLockoutCount};[pscustomobject]@{minimumLength=[int]$v.MinimumPasswordLength;complexityEnabled=$v.PasswordComplexity -eq '1';maximumAgeDays=[int]$v.MaximumPasswordAge;minimumAgeDays=[int]$v.MinimumPasswordAge;historyLength=[int]$v.PasswordHistorySize;lockoutThreshold=$threshold;lockoutDurationMinutes=$duration;lockoutResetMinutes=$reset}|ConvertTo-Json -Compress}finally{Remove-Item $f -Force -ErrorAction SilentlyContinue}";
+  const [screenLock, passwordPolicy, secureBoot, tpm, auditLogging] = await Promise.all([
+    powerShell(screenScript, parseJson, 'Windows machine policy or service-account user policy', 'Screen-lock policy'),
+    powerShell(passwordScript, parseWindowsPasswordPolicy, 'secedit local security policy export', 'Password policy'),
+    powerShell('[pscustomobject]@{enabled=[bool](Confirm-SecureBootUEFI)}|ConvertTo-Json -Compress', parseJson, 'Confirm-SecureBootUEFI', 'Secure Boot status'),
+    powerShell('Get-Tpm | Select-Object TpmPresent,TpmReady,TpmEnabled,TpmActivated,ManufacturerIdTxt,ManufacturerVersion | ConvertTo-Json -Compress', parseJson, 'Get-Tpm', 'TPM status'),
+    fixedCommand(options, 'auditpol.exe', ['/get', '/category:*'], (output) => ({ configured: /Success|Failure/i.test(output), output }), 'auditpol /get /category:*', 'Audit policy'),
+  ]);
+  const lockoutValuesAvailable = passwordPolicy.status === 'available'
+    && [passwordPolicy.value.lockoutThreshold, passwordPolicy.value.lockoutDurationMinutes, passwordPolicy.value.lockoutResetMinutes]
+      .every((value) => Number.isFinite(value));
+  const accountLockout = lockoutValuesAvailable
+    ? posture({
+      lockoutEnabled: passwordPolicy.value.lockoutThreshold > 0,
+      failureThreshold: passwordPolicy.value.lockoutThreshold,
+      failureWindowSeconds: passwordPolicy.value.lockoutResetMinutes * 60,
+      unlockAfterSeconds: passwordPolicy.value.lockoutDurationMinutes * 60,
+    }, passwordPolicy.source)
+    : passwordPolicy.status === 'available'
+      ? postureFailure(new Error('secedit output contained no complete account lockout policy'), passwordPolicy.source, 'Account lockout policy')
+      : { ...passwordPolicy };
+  return [screenLock, { ...passwordPolicy, accountLockout }, secureBoot, tpm, auditLogging];
+}
+
+async function collectLinuxPartTwo(options) {
+  const screenResults = await Promise.all([
+    fixedCommand(options, 'gsettings', ['get', 'org.gnome.desktop.session', 'idle-delay'], (output) => output.trim(), 'gsettings idle-delay', 'GNOME idle delay'),
+    fixedCommand(options, 'gsettings', ['get', 'org.gnome.desktop.screensaver', 'lock-enabled'], (output) => output.trim() === 'true', 'gsettings lock-enabled', 'GNOME lock enabled'),
+    fixedCommand(options, 'gsettings', ['get', 'org.gnome.desktop.screensaver', 'lock-delay'], (output) => output.trim(), 'gsettings lock-delay', 'GNOME lock delay'),
+  ]);
+  const passwordResults = await Promise.all([
+    fixedRead(options, '/etc/login.defs', parseLoginDefs, 'Password age policy'),
+    fixedRead(options, '/etc/security/pwquality.conf', parsePwQuality, 'PAM password quality policy'),
+    fixedRead(options, '/etc/pam.d/common-password', (output) => ({ pwqualityEnabled: /pam_pwquality\.so/.test(output), configuredLine: output.split(/\r?\n/).find((line) => /pam_pwquality\.so/.test(line))?.trim() ?? null }), 'PAM password quality stack'),
+  ]);
+  const screenLock = combinePostures(screenResults, 'GNOME gsettings', 'Screen-lock policy', ([idle, enabled, delay]) => ({ idleDelay: idle.value, lockEnabled: enabled.value, lockDelay: delay.value }));
+  const passwordPolicy = combinePostures(passwordResults, '/etc/login.defs and PAM password-quality configuration', 'Password policy', ([login, quality, pam]) => ({ loginDefaults: login.value, passwordQuality: quality.value, pam: pam.value }));
+  const accountLockout = await fixedRead(options, '/etc/pam.d/common-auth', parsePamLockout, 'PAM account lockout policy');
+  return Promise.all([
+    screenLock,
+    { ...passwordPolicy, accountLockout },
+    fixedRead(options, '/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c', (output) => ({ enabled: output.charCodeAt(output.length - 1) === 1 }), 'Secure Boot status'),
+    fixedRead(options, '/sys/class/tpm/tpm0/tpm_version_major', (output) => ({ present: true, versionMajor: integer(output.trim()) }), 'TPM status'),
+    fixedCommand(options, 'systemctl', ['is-active', 'auditd.service'], (output) => ({ active: output.trim() === 'active' }), 'systemctl is-active auditd.service', 'Audit logging status'),
+  ]);
+}
+
+async function collectMacPartTwo(options) {
+  const screenResults = await Promise.all([
+    fixedCommand(options, 'defaults', ['read', 'com.apple.screensaver', 'idleTime'], (output) => integer(output.trim()), 'defaults com.apple.screensaver idleTime', 'Screen-saver idle time'),
+    fixedCommand(options, 'defaults', ['read', 'com.apple.screensaver', 'askForPassword'], (output) => integer(output.trim()) === 1, 'defaults com.apple.screensaver askForPassword', 'Password after sleep requirement'),
+    fixedCommand(options, 'defaults', ['read', 'com.apple.screensaver', 'askForPasswordDelay'], (output) => integer(output.trim()), 'defaults com.apple.screensaver askForPasswordDelay', 'Password-after-sleep delay'),
+  ]);
+  const screenLock = combinePostures(screenResults, 'macOS screensaver defaults', 'Screen-lock policy', ([idle, required, delay]) => ({ idleTimeSeconds: idle.value, passwordOnResume: required.value, passwordDelaySeconds: delay.value }));
+  const passwordPolicy = await fixedCommand(options, 'pwpolicy', ['-getaccountpolicies'], (output) => ({ configured: output.trim().length > 0, policy: output.trim() }), 'pwpolicy -getaccountpolicies', 'Password policy');
+  const accountLockout = passwordPolicy.status === 'available'
+    ? (() => {
+      try {
+        return posture(parseMacLockoutPolicy(passwordPolicy.value.policy), passwordPolicy.source);
+      } catch (error) {
+        return postureFailure(error, passwordPolicy.source, 'Account lockout policy');
+      }
+    })()
+    : { ...passwordPolicy };
+  return Promise.all([
+    screenLock,
+    { ...passwordPolicy, accountLockout },
+    fixedCommand(options, 'system_profiler', ['SPiBridgeDataType', '-json'], (output) => {
+      const data = parseJson(output);
+      const text = JSON.stringify(data);
+      const match = text.match(/Secure Boot[^:]*[":\s]+(Full Security|Medium Security|No Security|Enabled|Disabled)/i);
+      if (!match) throw new Error('system profile did not expose a recognizable Secure Boot state');
+      return { state: match[1], enabled: !/No Security|Disabled/i.test(match[1]) };
+    }, 'system_profiler SPiBridgeDataType -json', 'Secure Boot status'),
+    Promise.resolve({ status: 'unavailable', value: null, reasonCode: 'unavailable', reason: 'macOS hardware does not expose a standard TPM provider', source: null }),
+    fixedCommand(options, 'launchctl', ['print', 'system/com.apple.auditd'], (output) => ({ loaded: /state\s*=\s*(running|waiting)/i.test(output) }), 'launchctl print system/com.apple.auditd', 'Audit logging status'),
+  ]);
+}
+
+async function collectPartTwo(platform, options) {
+  let values;
+  if (platform === 'win32') values = await collectWindowsPartTwo(options);
+  else if (platform === 'linux') values = await collectLinuxPartTwo(options);
+  else if (platform === 'darwin') values = await collectMacPartTwo(options);
+  else {
+    const unavailable = (subject) => ({ status: 'unavailable', value: null, reasonCode: 'unavailable', reason: `${subject} is not implemented for platform "${platform}"`, source: null });
+    values = ['Screen-lock policy', 'Password policy', 'Secure Boot status', 'TPM status', 'Audit logging status'].map(unavailable);
+    values[1] = { ...values[1], accountLockout: unavailable('Account lockout policy') };
+  }
+  const [screenLock, passwordPolicy, secureBoot, tpm, auditLogging] = values;
+  return { screenLock, passwordPolicy, secureBoot, tpm, auditLogging };
+}
+
 function tokenize(line) {
   return line.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((token) => token.replace(/^['"]|['"]$/g, '')) ?? [];
 }
@@ -387,8 +640,13 @@ export function createComplianceChecksCollector({
         }));
         uacPromise = Promise.resolve(notApplicable('UAC applies only to Windows'));
       }
-      const [ssh, firewall, uac] = await Promise.all([sshPromise, firewallPromise, uacPromise]);
-      return { platform, ssh, firewall, uac };
+      const [ssh, firewall, uac, partTwo] = await Promise.all([
+        sshPromise,
+        firewallPromise,
+        uacPromise,
+        collectPartTwo(platform, common),
+      ]);
+      return { platform, ssh, firewall, uac, ...partTwo };
     },
   };
 }

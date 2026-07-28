@@ -24,8 +24,8 @@ export class TaskRunner {
       });
     } catch (error) {
       result = { taskId: task?.taskId ?? null, ...createFailureResult(collectorName, error) };
-      await this.#handoff(result);
     }
+    await this.#handoff(result);
     if (journaled) {
       const interrupted = signal?.aborted;
       await this.taskJournal.markTerminal(
@@ -59,7 +59,6 @@ export class TaskRunner {
         signal,
       }),
     };
-    await this.#handoff(result);
     return result;
   }
 

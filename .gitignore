@@ -22,6 +22,12 @@ var/log/*
 var/queue/*
 var/*.json
 var/*.tmp
+
+# Local SQLite runtime databases
+var/*.sqlite
+var/*.sqlite-wal
+var/*.sqlite-shm
+
 !var/cache/.gitkeep
 !var/log/.gitkeep
 *.log

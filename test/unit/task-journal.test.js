@@ -87,6 +87,31 @@ test('restart recovers accepted and running tasks exactly once', async () => {
   });
 });
 
+test('restart reconciles an active task with a result written before the crash', async () => {
+  await withTempDirectory(async (directory) => {
+    const first = createJournal(directory);
+    await first.initialize();
+    await first.accept(task(1));
+    await first.markRunning('task-1');
+
+    const restarted = createJournal(directory);
+    const abandoned = await restarted.initialize({
+      resultQueueItems: [{
+        id: 'queue-1', taskId: 'task-1', state: 'pending', resultStatus: 'success',
+      }],
+    });
+
+    assert.equal(abandoned[0].reconciledStatus, 'completed');
+    assert.equal(abandoned[0].resultQueueItemId, 'queue-1');
+    const [reconciled] = await readEntries(directory);
+    assert.equal(reconciled.status, 'completed');
+    assert.match(reconciled.reason, /queue-1/);
+
+    const nextRestart = createJournal(directory);
+    assert.deepEqual(await nextRestart.initialize(), []);
+  });
+});
+
 test('terminal state survives restart without being recovered', async () => {
   await withTempDirectory(async (directory) => {
     const first = createJournal(directory);

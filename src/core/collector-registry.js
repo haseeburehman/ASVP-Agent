@@ -23,6 +23,12 @@ const builtInDefinitions = {
     timeoutMs: 30000,
     concurrency: 1,
   },
+  'credential-exposure': {
+    modulePath: '../collectors/credential-exposure/index.js',
+    implemented: true,
+    timeoutMs: 30000,
+    concurrency: 1,
+  },
   containers: {
     modulePath: '../collectors/containers/index.js',
     implemented: true,
@@ -69,6 +75,24 @@ const builtInDefinitions = {
     modulePath: '../collectors/disk-security/index.js',
     implemented: true,
     timeoutMs: 20000,
+    concurrency: 1,
+  },
+  'hardware-info': {
+    modulePath: '../collectors/hardware-info/index.js',
+    implemented: true,
+    timeoutMs: 20000,
+    concurrency: 1,
+  },
+  'kernel-hardening': {
+    modulePath: '../collectors/kernel-hardening/index.js',
+    implemented: true,
+    timeoutMs: 15000,
+    concurrency: 1,
+  },
+  'file-permissions': {
+    modulePath: '../collectors/file-permissions/index.js',
+    implemented: true,
+    timeoutMs: 15000,
     concurrency: 1,
   },
 };

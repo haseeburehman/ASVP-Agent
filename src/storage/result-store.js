@@ -156,6 +156,19 @@ export class ResultStore {
     });
   }
 
+  listForStartupReconciliation() {
+    return this.#serialize(async () => (await this.#readItems())
+      .filter((item) => typeof item.result?.taskId === 'string' && item.result.taskId)
+      .map((item) => ({
+        id: item.id,
+        state: item.state,
+        enqueuedAt: item.enqueuedAt,
+        taskId: item.result.taskId,
+        collectorName: item.result.collector,
+        resultStatus: item.result.status,
+      })));
+  }
+
   markInFlight(id) {
     return this.#update(id, (item) => ({
       ...item,

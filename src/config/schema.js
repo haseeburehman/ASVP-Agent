@@ -104,6 +104,23 @@ export const configSchema = {
     collectors: {
       type: 'object',
       properties: {
+        'credential-exposure': {
+          type: 'object',
+          additionalProperties: false,
+          required: ['timeoutMs', 'concurrency', 'scanPaths', 'maxDepth', 'maxFiles', 'maxFindings'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
+            scanPaths: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+              uniqueItems: true,
+            },
+            maxDepth: { type: 'integer', minimum: 0 },
+            maxFiles: { type: 'integer', minimum: 1 },
+            maxFindings: { type: 'integer', minimum: 1 },
+          },
+        },
         'process-summary': {
           type: 'object',
           required: ['timeoutMs', 'concurrency', 'maxItems'],
@@ -129,6 +146,33 @@ export const configSchema = {
             timeoutMs: { type: 'integer', minimum: 1 },
             concurrency: { type: 'integer', minimum: 1 },
             maxItems: { type: 'integer', minimum: 1 },
+          },
+        },
+        'hardware-info': {
+          type: 'object',
+          additionalProperties: false,
+          required: ['timeoutMs', 'concurrency'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
+          },
+        },
+        'kernel-hardening': {
+          type: 'object',
+          additionalProperties: false,
+          required: ['timeoutMs', 'concurrency'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
+          },
+        },
+        'file-permissions': {
+          type: 'object',
+          additionalProperties: false,
+          required: ['timeoutMs', 'concurrency'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
           },
         },
       },

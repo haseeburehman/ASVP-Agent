@@ -3,8 +3,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { AgentRuntime } from '../../src/agent/runtime.js';
 import { signTaskEnvelope } from '../../src/security/task-envelope.js';
 import { TaskEnvelopeVerifier } from '../../src/task/envelope-verifier.js';
+import { TaskJournal } from '../../src/task/task-journal.js';
 
 const now = Date.parse('2026-07-27T12:00:00.000Z');
 const identity = {
@@ -55,9 +57,104 @@ test('accepts valid signed task envelopes and persists replay claims', async () 
     const task = envelope();
     assert.deepEqual(await verifier.verifyAll([task]), [task]);
     const ledger = JSON.parse(await readFile(path.join(directory, 'replay.json'), 'utf8'));
-    assert.deepEqual(ledger.entries, [{ keyId: 'task-key-1', nonce: 'nonce-1', sequence: 1, expiresAt: now + 60_000 }]);
+    assert.deepEqual(ledger.entries, [{
+      taskId: 'task-1',
+      collectorName: 'noop',
+      keyId: 'task-key-1',
+      nonce: 'nonce-1',
+      sequence: 1,
+      expiresAt: now + 60_000,
+    }]);
     assert.deepEqual(warnings, []);
   });
+});
+
+test('crash after replay claim persistence leaves no journal entry and remains replay-protected after restart', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-replay-journal-crash-'));
+  const warningLogs = [];
+  let taskRunnerInvocations = 0;
+  try {
+    const ledgerPath = 'state/replay.json';
+    const journalPath = 'state/task-journal.json';
+    const firstVerifier = new TaskEnvelopeVerifier({
+      identity,
+      ledgerPath,
+      cwd: directory,
+      clock: () => now,
+    });
+    const firstJournal = new TaskJournal({ path: journalPath, cwd: directory });
+    await firstJournal.initialize();
+    const task = envelope();
+
+    await assert.rejects(async () => {
+      const verified = await firstVerifier.verifyAll([task]);
+      assert.deepEqual(verified, [task]);
+      throw new Error('simulated crash after replay write before journal accept');
+      // The real next operation would be: await firstJournal.accept(task).
+    }, /simulated crash after replay write before journal accept/);
+
+    assert.deepEqual(await firstJournal.listEntries(), []);
+
+    const restartedVerifier = new TaskEnvelopeVerifier({
+      identity,
+      ledgerPath,
+      cwd: directory,
+      clock: () => now,
+    });
+    const restartedJournal = new TaskJournal({ path: journalPath, cwd: directory });
+    const emptyStats = {
+      pendingCount: 0, inFlightCount: 0, deliveredCount: 0, failedPermanentCount: 0,
+      failedPermanentRetainUntil: null, totalItems: 0, totalBytes: 0, evictedCount: 0, lastEvictedAt: null,
+    };
+    const logger = {
+      info() {}, debug() {}, error() {},
+      warn(context, message) { warningLogs.push({ context, message }); },
+    };
+    const runtime = new AgentRuntime({
+      config: {
+        storage: { statusPath: 'state/status.json' },
+        collectors: { upload: { uploadConcurrency: 1, maxPayloadWarningBytes: 1024 } },
+        retry: { initialDelayMs: 1, maximumDelayMs: 1 },
+        agent: { heartbeatIntervalMs: 1, pollIntervalMs: 1 },
+      },
+      identity,
+      apiClient: {
+        async sendHeartbeat() {},
+        async pollTasks() { return []; },
+      },
+      logger,
+      version: 'test',
+      cwd: directory,
+      taskEnvelopeVerifier: restartedVerifier,
+      taskJournal: restartedJournal,
+      taskRunner: {
+        async runAll() { taskRunnerInvocations += 1; },
+      },
+      resultStore: {
+        async listForStartupReconciliation() { return []; },
+        async getStats() { return emptyStats; },
+      },
+      resultUploader: {
+        async drain() {
+          return { attempted: 0, delivered: 0, requeued: 0, authFailures: 0, failedPermanent: 0, interrupted: 0 };
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.stop();
+
+    const claims = await restartedVerifier.listReplayClaims();
+    assert.equal(claims.some((claim) => claim.taskId === task.taskId
+      && claim.nonce === task.nonce && claim.sequence === task.sequence), true);
+    assert.deepEqual(await restartedJournal.listEntries(), []);
+    assert.deepEqual(await restartedVerifier.verifyAll([task]), []);
+    assert.equal(taskRunnerInvocations, 0);
+    assert.ok(warningLogs.some(({ context, message }) => context.taskId === task.taskId
+      && message === 'Found durable replay claim without a task journal entry; task will not be re-executed'));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('filters invalid signatures, identity claims, timestamps, nonce, and sequence', async () => {
@@ -98,6 +195,18 @@ test('rejects replayed nonce or sequence after verifier restart', async () => {
       envelope({ taskId: 'task-2', sequence: 2 }),
       envelope({ taskId: 'task-3', nonce: 'nonce-3' }),
     ]), []);
+  });
+});
+
+test('returns durable replay claims for startup reconciliation', async () => {
+  await withVerifier(async ({ verifier }) => {
+    const task = envelope();
+    await verifier.verifyAll([task]);
+
+    const claims = await verifier.listReplayClaims();
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0].taskId, task.taskId);
+    assert.equal(claims[0].collectorName, task.collectorName);
   });
 });
 

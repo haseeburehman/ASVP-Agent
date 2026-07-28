@@ -87,6 +87,30 @@ test('task runner converts an unknown collector into a failed result', async () 
   assert.deepEqual(handedOff, [result]);
 });
 
+test('durable result handoff precedes terminal journal state across a crash window', async () => {
+  const events = [];
+  const journal = {
+    async accept() { events.push('journal:accepted'); },
+    async markRunning() { events.push('journal:running'); },
+    async markTerminal() { events.push('journal:terminal'); },
+  };
+  const runner = new TaskRunner({
+    registry: new CollectorRegistry(),
+    logger: silentLogger,
+    taskJournal: journal,
+    async onResult() {
+      events.push('result:durable');
+      throw new Error('simulated crash after result write');
+    },
+  });
+
+  await assert.rejects(
+    runner.runAll([{ taskId: 'crash-window', collectorName: 'noop', params: {} }]),
+    /simulated crash/,
+  );
+  assert.deepEqual(events, ['journal:accepted', 'journal:running', 'result:durable']);
+});
+
 test('mock transport exposes only the harmless noop collector task', async () => {
   const apiClient = new ApiClient({
     config: createApiConfig(),
