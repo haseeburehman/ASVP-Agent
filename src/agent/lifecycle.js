@@ -39,10 +39,20 @@ export class AgentLifecycle {
       agentVersion: this.version,
       enrollmentToken: this.config.server.enrollmentToken,
     };
+    const existingIdentity = await this.credentialStore.loadIdentity();
+    const hasCompleteIdentity = existingIdentity?.agentId && existingIdentity?.tenantId
+      && existingIdentity?.authToken && existingIdentity?.encryptionKey
+      && existingIdentity?.taskSigningKey && existingIdentity?.taskSigningKeyId;
+    if (this.config.server.mode === 'http' && !hasCompleteIdentity && !metadata.enrollmentToken) {
+      const message = 'Agent is not enrolled - run the enroll command or provide an enrollment token before starting the service';
+      this.logger.error({ reasonCode: 'AGENT_NOT_ENROLLED' }, message);
+      throw new Error(message);
+    }
     const { identity, registered } = await loadOrRegisterIdentity({
       credentialStore: this.credentialStore,
       apiClient: this.apiClient,
       metadata,
+      existingIdentity,
       validateExisting: (existing) => this.apiClient.sendHeartbeat(existing, {
         agentId: existing.agentId,
         hostname: metadata.hostname,

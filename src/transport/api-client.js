@@ -153,8 +153,8 @@ export class ApiClient {
   }
 }
 
-export async function loadOrRegisterIdentity({ credentialStore, apiClient, force = false, metadata = {}, validateExisting }) {
-  const existing = await credentialStore.loadIdentity();
+export async function loadOrRegisterIdentity({ credentialStore, apiClient, force = false, metadata = {}, validateExisting, existingIdentity }) {
+  const existing = existingIdentity === undefined ? await credentialStore.loadIdentity() : existingIdentity;
   if (!force && existing?.agentId && existing?.tenantId && existing?.authToken && existing?.encryptionKey && existing?.taskSigningKey && existing?.taskSigningKeyId) {
     if (typeof validateExisting !== 'function') return { identity: existing, registered: false };
     try {

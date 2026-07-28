@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { AgentLifecycle } from '../../src/agent/lifecycle.js';
 import { CredentialStore } from '../../src/security/credentials.js';
 import { loadOrRegisterIdentity, ManagementHttpError } from '../../src/transport/api-client.js';
 
@@ -32,6 +33,33 @@ function createApiClientMock() {
     },
   };
 }
+
+test('HTTP startup fails clearly before registration when enrollment is missing', async () => {
+  const errors = [];
+  let registerCalls = 0;
+  const lifecycle = new AgentLifecycle({
+    config: {
+      server: { mode: 'http', enrollmentToken: null },
+      agent: { logLevel: 'info' },
+      storage: {},
+    },
+    version: '1.1.0',
+    logger: { info() {}, warn() {}, debug() {}, error(context, message) { errors.push({ context, message }); } },
+    credentialStore: {
+      async initialize() {},
+      async loadIdentity() { return null; },
+    },
+    apiClient: { async register() { registerCalls += 1; } },
+    resultStore: {},
+  });
+
+  await assert.rejects(lifecycle.start(), /Agent is not enrolled - run the enroll command or provide an enrollment token/);
+  assert.equal(registerCalls, 0);
+  assert.deepEqual(errors, [{
+    context: { reasonCode: 'AGENT_NOT_ENROLLED' },
+    message: 'Agent is not enrolled - run the enroll command or provide an enrollment token before starting the service',
+  }]);
+});
 
 test('registers once, persists identity, and reuses it on subsequent runs', async () => {
   const store = await new CredentialStore({
