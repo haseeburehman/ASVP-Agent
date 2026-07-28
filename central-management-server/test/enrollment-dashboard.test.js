@@ -20,8 +20,8 @@ async function register(api, body = {}) {
   return (await api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, ...body, enrollmentToken }).expect(201)).body;
 }
 
- test('new registration always requires a tenant-bound, limited, unexpired token', async (t) => {
-  const required = setup(); t.after(() => required.database.close());
+test('token enforcement requires a tenant-bound, limited, unexpired token when enabled', async (t) => {
+  const required = setup({ requireEnrollmentToken: true }); t.after(() => required.database.close());
   await required.api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT }).expect(403);
   await required.api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, enrollmentToken: 'wrong' }).expect(403);
   const issued = await token(required.api, { expiresInHours: 24, maxUses: 1 });
@@ -36,6 +36,18 @@ async function register(api, body = {}) {
   const expiring = await token(required.api, { expiresInHours: 1, maxUses: 2 });
   required.setTime('2026-01-01T02:00:00.000Z');
   await required.api.post('/api/agents/register').send({ hostname: 'host', platform: 'linux', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, enrollmentToken: expiring.token }).expect(403);
+});
+
+test('tokenless registration uses the default tenant when enrollment enforcement is disabled', async (t) => {
+  const optional = setup(); t.after(() => optional.database.close());
+  const response = await optional.api.post('/api/agents/register').send({
+    hostname: 'zero-touch-host', platform: 'win32', architecture: 'x64', agentVersion: '1.1.0', machineFingerprint: MACHINE_FINGERPRINT,
+  }).expect(201);
+  assert.equal(response.body.tenantId, DEFAULT_TENANT_ID);
+  assert.equal(optional.database.prepare('SELECT tenant_id FROM agents WHERE id = ?').get(response.body.agentId).tenant_id, DEFAULT_TENANT_ID);
+  await optional.api.post('/api/agents/register').send({
+    hostname: 'bad-token-host', platform: 'win32', architecture: 'x64', machineFingerprint: MACHINE_FINGERPRINT, enrollmentToken: 'invalid-explicit-token',
+  }).expect(403);
 });
 
 test('authenticated fleet computes independent states and flips overdue agents stale', async (t) => {

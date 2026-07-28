@@ -34,12 +34,12 @@ function createApiClientMock() {
   };
 }
 
-test('HTTP startup fails clearly before registration when enrollment is missing', async () => {
+test('HTTP startup fails clearly before registration when the server URL is missing', async () => {
   const errors = [];
   let registerCalls = 0;
   const lifecycle = new AgentLifecycle({
     config: {
-      server: { mode: 'http', enrollmentToken: null },
+      server: { mode: 'http', url: 'https://management.example.invalid', enrollmentToken: null },
       agent: { logLevel: 'info' },
       storage: {},
     },
@@ -53,11 +53,11 @@ test('HTTP startup fails clearly before registration when enrollment is missing'
     resultStore: {},
   });
 
-  await assert.rejects(lifecycle.start(), /Agent is not enrolled - run the enroll command or provide an enrollment token/);
+  await assert.rejects(lifecycle.start(), /Agent management server URL is not configured/);
   assert.equal(registerCalls, 0);
   assert.deepEqual(errors, [{
-    context: { reasonCode: 'AGENT_NOT_ENROLLED' },
-    message: 'Agent is not enrolled - run the enroll command or provide an enrollment token before starting the service',
+    context: { reasonCode: 'SERVER_URL_NOT_CONFIGURED' },
+    message: 'Agent management server URL is not configured - run the enroll command or provide a valid server URL before starting the service',
   }]);
 });
 

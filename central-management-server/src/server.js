@@ -13,6 +13,7 @@ const taskSigningSecret = process.env.TASK_SIGNING_SECRET;
 const taskSigningKeyId = process.env.TASK_SIGNING_KEY_ID ?? 'v1';
 const expectedHeartbeatIntervalMs = Number(process.env.EXPECTED_HEARTBEAT_INTERVAL_MS ?? 30000);
 const baselineRescanIntervalMs = Number(process.env.BASELINE_RESCAN_INTERVAL_MS ?? 86400000);
+const requireEnrollmentToken = process.env.REQUIRE_ENROLLMENT_TOKEN === 'true';
 if (typeof taskSigningSecret !== 'string' || !taskSigningSecret) throw new Error('TASK_SIGNING_SECRET must be set');
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ASVP_SERVER_PORT must be a valid TCP port');
 if (!Number.isInteger(expectedHeartbeatIntervalMs) || expectedHeartbeatIntervalMs < 100) throw new Error('EXPECTED_HEARTBEAT_INTERVAL_MS must be at least 100');
@@ -28,6 +29,7 @@ const app = createApp({
   taskSigningKeyId,
   expectedHeartbeatIntervalMs,
   baselineRescanIntervalMs,
+  requireEnrollmentToken,
   fleetHub,
   dashboardSessions,
   secureDashboardCookie: process.env.DASHBOARD_SECURE_COOKIE === 'true',

@@ -3,6 +3,7 @@ import { ApiClient, loadOrRegisterIdentity } from '../transport/api-client.js';
 import { CredentialStore } from '../security/credentials.js';
 import { ResultStore } from '../storage/result-store.js';
 import { AgentRuntime } from './runtime.js';
+import { PLACEHOLDER_SERVER_URL } from '../enrollment/index.js';
 import { createLogger, flushLogger } from '../utils/logger.js';
 
 export class AgentLifecycle {
@@ -43,9 +44,11 @@ export class AgentLifecycle {
     const hasCompleteIdentity = existingIdentity?.agentId && existingIdentity?.tenantId
       && existingIdentity?.authToken && existingIdentity?.encryptionKey
       && existingIdentity?.taskSigningKey && existingIdentity?.taskSigningKeyId;
-    if (this.config.server.mode === 'http' && !hasCompleteIdentity && !metadata.enrollmentToken) {
-      const message = 'Agent is not enrolled - run the enroll command or provide an enrollment token before starting the service';
-      this.logger.error({ reasonCode: 'AGENT_NOT_ENROLLED' }, message);
+    const configuredServerUrl = typeof this.config.server.url === 'string' ? this.config.server.url.trim().replace(/\/$/, '') : '';
+    if (this.config.server.mode === 'http' && !hasCompleteIdentity
+      && (!configuredServerUrl || configuredServerUrl === PLACEHOLDER_SERVER_URL)) {
+      const message = 'Agent management server URL is not configured - run the enroll command or provide a valid server URL before starting the service';
+      this.logger.error({ reasonCode: 'SERVER_URL_NOT_CONFIGURED' }, message);
       throw new Error(message);
     }
     const { identity, registered } = await loadOrRegisterIdentity({

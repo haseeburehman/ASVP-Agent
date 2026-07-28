@@ -62,7 +62,9 @@ Type: filesandordirs; Name: "{app}"
 
 [Code]
 var
+  EnrollmentPage: TInputQueryWizardPage;
   EnrollmentSaved: Boolean;
+  BakedEnrollment: Boolean;
   InstallerServerUrl: String;
   InstallerEnrollmentToken: String;
 
@@ -190,14 +192,50 @@ end;
 
 procedure InitializeWizard();
 begin
+#if MyPreconfigured == "1"
+  BakedEnrollment := True;
+#else
+  BakedEnrollment := False;
+#endif
   InstallerServerUrl := Trim(ExpandConstant('{param:SERVERURL|}'));
   InstallerEnrollmentToken := Trim(ExpandConstant('{param:ENROLLTOKEN|}'));
   EnrollmentSaved := False;
+  EnrollmentPage := CreateInputQueryPage(wpSelectDir,
+    'Enroll ASVP Agent',
+    'Connect this installation to its management server',
+    'Enter the management server URL. The enrollment token is optional and is required only when the server enables token enforcement.');
+  EnrollmentPage.Add('Management server URL:', False);
+  EnrollmentPage.Add('Enrollment token (optional):', True);
+  EnrollmentPage.Values[0] := InstallerServerUrl;
+  EnrollmentPage.Values[1] := InstallerEnrollmentToken;
+  if (EnrollmentPage.Values[0] = '') and not BakedEnrollment then
+    EnrollmentPage.Values[0] := 'https://';
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = EnrollmentPage.ID) and (BakedEnrollment or (InstallerServerUrl <> ''));
 end;
 
 function ShouldInstallService(): Boolean;
 begin
-  Result := EnrollmentSaved;
+  Result := BakedEnrollment or EnrollmentSaved;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  ServerUrl: String;
+begin
+  Result := True;
+  if CurPageID = EnrollmentPage.ID then
+  begin
+    ServerUrl := Trim(EnrollmentPage.Values[0]);
+    if (ServerUrl <> '') and not IsValidManagementUrl(ServerUrl) then
+    begin
+      MsgBox('Enter a well-formed HTTPS URL. HTTP is allowed only for 127.0.0.1 or localhost testing, or leave it empty to install without starting the service.', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -207,14 +245,27 @@ var
   InputPath: String;
   EnrollmentSucceeded: Boolean;
 begin
-  if (CurStep = ssPostInstall) and not EnrollmentSaved and
-    (InstallerServerUrl <> '') and (InstallerEnrollmentToken <> '') then
+  if (CurStep = ssPostInstall) and not BakedEnrollment and not EnrollmentSaved then
   begin
-    if not IsValidManagementUrl(InstallerServerUrl) then
+    if InstallerServerUrl <> '' then
+    begin
+      EnrollmentPage.Values[0] := InstallerServerUrl;
+      EnrollmentPage.Values[1] := InstallerEnrollmentToken;
+    end;
+    if Trim(EnrollmentPage.Values[0]) = '' then
+    begin
+      Log('ASVP Agent service was not installed or started because no management server URL was configured.');
+      SuppressibleMsgBox(
+        'ASVP Agent was installed but its service was not started because no management server URL was configured.' + #13#10 + #13#10 +
+        'Run the enroll command and then service install, or reinstall with /SERVERURL=. The enrollment token is optional unless required by the server.',
+        mbInformation, MB_OK, IDOK);
+      Exit;
+    end;
+    if not IsValidManagementUrl(Trim(EnrollmentPage.Values[0])) then
       RaiseException('/SERVERURL must be a well-formed HTTPS URL. HTTP is allowed only for 127.0.0.1 or localhost testing.');
     InputPath := ExpandConstant('{tmp}\asvp-enrollment.txt');
-    if not SaveStringToFile(InputPath, InstallerServerUrl + #13#10 +
-      InstallerEnrollmentToken, False) then
+    if not SaveStringToFile(InputPath, Trim(EnrollmentPage.Values[0]) + #13#10 +
+      Trim(EnrollmentPage.Values[1]), False) then
       RaiseException('Unable to prepare ASVP enrollment configuration.');
     if not Exec(ExpandConstant('{sys}\icacls.exe'), '"' + InputPath +
       '" /inheritance:r /grant:r *S-1-5-18:F *S-1-5-32-544:F',
@@ -232,13 +283,5 @@ begin
     if not EnrollmentSucceeded then
       RaiseException('Unable to save ASVP enrollment configuration. The service was not installed.');
     EnrollmentSaved := True;
-  end
-  else if (CurStep = ssPostInstall) and not EnrollmentSaved then
-  begin
-    Log('ASVP Agent service was not installed or started because /SERVERURL and /ENROLLTOKEN were not both supplied.');
-    SuppressibleMsgBox(
-      'ASVP Agent was installed but its service was not started because enrollment information is missing.' + #13#10 + #13#10 +
-      'Run asvp-agent.exe --config "C:\Program Files\ASVP Agent\config\default.json" enroll, then run service install; or reinstall with both /SERVERURL= and /ENROLLTOKEN= parameters.',
-      mbInformation, MB_OK, IDOK);
   end;
 end;

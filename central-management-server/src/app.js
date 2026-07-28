@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { decodeResultEnvelope, generateAgentSecrets, hashToken } from './crypto.js';
 import { createDashboardSessions } from './dashboard-session.js';
+import { DEFAULT_TENANT_ID } from './database.js';
 import { computeFleetStatus } from './fleet-status.js';
 import { canonicalizeTaskParams, deriveTaskSigningKey, signTaskEnvelope } from '../../src/security/task-envelope.js';
 
@@ -70,6 +71,7 @@ export function createApp({
   secureDashboardCookie = false,
   baselineRescanIntervalMs = 24 * 60 * 60 * 1000,
   baselineCollectors = BASELINE_COLLECTORS,
+  requireEnrollmentToken = false,
   fleetHub = { broadcast() {} },
   dashboardSessions: suppliedDashboardSessions,
   logger = console,
@@ -168,9 +170,13 @@ export function createApp({
 
   const registerNew = database.transaction(({ hostname, platform, architecture, agentVersion, enrollmentToken, machineFingerprint }) => {
     const timestamp = now().toISOString();
-    const tokenRow = findEnrollmentToken(enrollmentToken, timestamp);
-    if (!tokenRow || consumeEnrollmentToken.run(tokenRow.token_hash, tokenRow.tenant_id, timestamp).changes !== 1) throw httpError(403, 'Valid enrollment token required');
-    const tenantId = tokenRow.tenant_id;
+    const suppliedEnrollmentToken = typeof enrollmentToken === 'string' && enrollmentToken.trim() !== '';
+    const tokenRow = suppliedEnrollmentToken ? findEnrollmentToken(enrollmentToken, timestamp) : null;
+    if (suppliedEnrollmentToken && (!tokenRow || consumeEnrollmentToken.run(tokenRow.token_hash, tokenRow.tenant_id, timestamp).changes !== 1)) {
+      throw httpError(403, 'Valid enrollment token required');
+    }
+    if (!suppliedEnrollmentToken && requireEnrollmentToken) throw httpError(403, 'Valid enrollment token required');
+    const tenantId = tokenRow?.tenant_id ?? DEFAULT_TENANT_ID;
     const agentId = randomUUID();
     const secrets = generateAgentSecrets();
     insertAgent.run(agentId, tenantId, hostname, hashToken(secrets.authToken), secrets.encryptionKey, timestamp, platform, architecture, agentVersion, machineFingerprint);

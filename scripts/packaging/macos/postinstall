@@ -14,7 +14,7 @@ if [ -f "$enrollment_file" ]; then
   enrollment_token=$(sed -n '2p' "$enrollment_file")
 fi
 
-if [ -n "$server_url" ] && [ -n "$enrollment_token" ]; then
+if [ -n "$server_url" ]; then
   input_file=$(mktemp '/Library/Application Support/ASVP Agent/enrollment.XXXXXX')
   chmod 0600 "$input_file"
   printf '%s\n%s\n' "$server_url" "$enrollment_token" > "$input_file"
@@ -22,10 +22,15 @@ if [ -n "$server_url" ] && [ -n "$enrollment_token" ]; then
   rm -f "$input_file" "$enrollment_file"
   printf '%s\n' 'ASVP Agent enrollment saved. Installing and starting its launchd service now.'
   "$binary" --config "$config" service install
+elif ! grep -q 'management\.example\.invalid' "$config"; then
+  rm -f "$enrollment_file"
+  printf '%s\n' 'ASVP Agent installed with a baked management server URL. Installing and starting its launchd service now.'
+  "$binary" --config "$config" service install
 else
   printf '%s\n' \
-    'ASVP Agent installed but not started because enrollment information is missing.' \
-    'Set both ASVP_SERVER_URL and ASVP_ENROLLMENT_TOKEN during installation, or place the server URL and token on separate lines in the enrollment file before installation.' \
+    'ASVP Agent installed but not started because no management server URL is configured.' \
+    'Set ASVP_SERVER_URL during installation, or place the server URL and optional token on separate lines in the enrollment file before installation.' \
+    'ASVP_ENROLLMENT_TOKEN is optional unless the management server enables REQUIRE_ENROLLMENT_TOKEN.' \
     "Enrollment file: $enrollment_file" \
     'Manual setup:' \
     "  sudo '$binary' --config '$config' enroll" \

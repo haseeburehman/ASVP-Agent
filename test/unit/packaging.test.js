@@ -44,23 +44,26 @@ test('Windows uninstall deletes only the confirmed install tree while upgrades p
     assert.match(script, /#ifndef MyPreconfigured/);
   assert.match(script, /\{param:SERVERURL\|\}/);
   assert.match(script, /\{param:ENROLLTOKEN\|\}/);
-  assert.match(script, /Result := EnrollmentSaved/);
-  assert.match(script, /service was not installed or started because \/SERVERURL and \/ENROLLTOKEN were not both supplied/);
-  assert.doesNotMatch(script, /BakedEnrollment/);
+  assert.match(script, /Result := BakedEnrollment or EnrollmentSaved/);
+  assert.match(script, /#if MyPreconfigured == "1"[\s\S]*BakedEnrollment := True/);
+  assert.match(script, /service was not installed or started because no management server URL was configured/);
+  assert.doesNotMatch(script, /SERVERURL and \/ENROLLTOKEN were not both supplied/);
   assert.doesNotMatch(script, /LoadStringFromFile\(ExpandConstant\('\{#MyConfig\}'\)/);
   assert.match(script, /\[UninstallDelete\][\s\S]*Type: filesandordirs; Name: "\{app\}"/);
   assert.match(script, /Type "yes" to confirm/);
   assert.doesNotMatch(script, /\[UninstallDelete\][\s\S]*Name: "(?:\{autopf\}|[A-Z]:\\|\\\\)/i);
 });
 
-test('Linux and macOS packages enroll before service installation and remain stopped without credentials', async () => {
+test('Linux and macOS packages accept URL-only enrollment and remain stopped only without a URL', async () => {
   for (const relativePath of ['scripts/packaging/linux/postinstall.sh', 'scripts/packaging/macos/postinstall']) {
     const script = await readFile(path.join(root, relativePath), 'utf8');
     assert.match(script, /ASVP_SERVER_URL/);
     assert.match(script, /ASVP_ENROLLMENT_TOKEN/);
+    assert.match(script, /if \[ -n "\$server_url" \]; then/);
     assert.match(script, /enroll --input-file "\$input_file"[\s\S]*service install/);
-    assert.match(script, /installed but not started because enrollment information is missing/);
-    assert.doesNotMatch(script, /grep -q 'management/);
+    assert.match(script, /installed with a baked management server URL[\s\S]*service install/);
+    assert.match(script, /installed but not started because no management server URL is configured/);
+    assert.match(script, /ASVP_ENROLLMENT_TOKEN is optional/);
   }
 });
 
