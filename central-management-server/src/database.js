@@ -49,6 +49,50 @@ CREATE TABLE IF NOT EXISTS results (
   raw_data TEXT NOT NULL,
   received_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS normalized_software (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  source_result_id TEXT NOT NULL REFERENCES results(id) ON DELETE CASCADE,
+  source_collector TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  raw_name TEXT NOT NULL,
+  raw_version TEXT,
+  vendor TEXT,
+  product TEXT,
+  normalized_version TEXT,
+  cpe23_candidate TEXT,
+  match_confidence TEXT NOT NULL CHECK(match_confidence IN ('high','medium','low','unmatched')),
+  match_method TEXT NOT NULL,
+  normalized_at TEXT NOT NULL,
+  UNIQUE(source_result_id, ordinal)
+);
+CREATE TABLE IF NOT EXISTS patch_feed_cache (
+  feed_name TEXT PRIMARY KEY,
+  source_url TEXT NOT NULL,
+  source_format TEXT NOT NULL,
+  advisories_json TEXT NOT NULL,
+  fetched_at TEXT,
+  last_attempt_at TEXT NOT NULL,
+  last_error TEXT
+);
+CREATE TABLE IF NOT EXISTS missing_patches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  source_result_id TEXT NOT NULL REFERENCES results(id) ON DELETE CASCADE,
+  advisory_id TEXT NOT NULL,
+  severity TEXT,
+  title TEXT,
+  published_date TEXT,
+  source TEXT NOT NULL,
+  source_url TEXT,
+  confidence TEXT NOT NULL CHECK(confidence IN ('high','low')),
+  rationale TEXT NOT NULL,
+  feed_fetched_at TEXT NOT NULL,
+  matched_at TEXT NOT NULL,
+  UNIQUE(source_result_id, advisory_id, source)
+);
 CREATE TABLE IF NOT EXISTS enrollment_tokens (
   token_hash TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -90,6 +134,10 @@ function migrateTenantFoundation(database) {
     CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id, id);
     CREATE INDEX IF NOT EXISTS idx_tasks_poll ON tasks(tenant_id, status, agent_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_results_agent ON results(tenant_id, agent_id, received_at);
+    CREATE INDEX IF NOT EXISTS idx_normalized_software_agent ON normalized_software(tenant_id, agent_id, normalized_at);
+    CREATE INDEX IF NOT EXISTS idx_normalized_software_source ON normalized_software(tenant_id, source_result_id);
+    CREATE INDEX IF NOT EXISTS idx_missing_patches_agent ON missing_patches(tenant_id, agent_id, matched_at);
+    CREATE INDEX IF NOT EXISTS idx_missing_patches_source ON missing_patches(tenant_id, source_result_id);
     CREATE INDEX IF NOT EXISTS idx_events_agent ON agent_events(tenant_id, agent_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_enrollment_tokens_tenant ON enrollment_tokens(tenant_id, expires_at);
   `);

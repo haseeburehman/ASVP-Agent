@@ -14,7 +14,14 @@ function unavailableSource(source, error) {
   return sourceResult(null, source, `${source} enumeration failed: ${error.message}`, 0);
 }
 
-function appItem(name, version, binaryPath, source) {
+function detail(value, reason = null, status = value == null ? 'unavailable' : 'available') {
+  return { status, reason: value == null ? reason : null };
+}
+
+function appItem(name, version, binaryPath, source, enrichment = {}) {
+  const vendor = enrichment.vendor || null;
+  const installPath = enrichment.installPath || null;
+  const installSource = enrichment.installSource || null;
   return {
     name: name || 'Unknown',
     version: version || null,
@@ -23,6 +30,14 @@ function appItem(name, version, binaryPath, source) {
     kind: 'application',
     source,
     correlated: false,
+    vendor,
+    installPath,
+    installSource,
+    detailAvailability: {
+      vendor: detail(vendor, enrichment.vendorReason ?? 'Vendor/publisher metadata was not exposed by this source', enrichment.vendorStatus),
+      installPath: detail(installPath, enrichment.installPathReason ?? 'The package source did not expose an installation directory', enrichment.installPathStatus),
+      installSource: detail(installSource, enrichment.installSourceReason ?? 'The installation source could not be determined', enrichment.installSourceStatus),
+    },
   };
 }
 
@@ -48,15 +63,25 @@ function normalizeStatus(status) {
 
 function parseDpkg(output) {
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [name, version] = line.split('\t');
-    return appItem(name, version, null, 'dpkg');
+    const [name, version, maintainer] = line.split('\t');
+    return appItem(name, version, null, 'dpkg', {
+      vendor: maintainer || null,
+      installSource: 'dpkg',
+      installPathReason: 'dpkg package metadata does not define one authoritative installation directory',
+    });
   });
 }
 
 function parseRpm(output) {
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [name, version, architecture] = line.split('\t');
-    return appItem(name, architecture ? `${version}.${architecture}` : version, null, 'rpm');
+    const [name, version, architecture, vendor, prefixes] = line.split('\t');
+    const installPath = prefixes && prefixes !== '(none)' ? prefixes.split(/\s+/)[0] : null;
+    return appItem(name, architecture ? `${version}.${architecture}` : version, null, 'rpm', {
+      vendor: vendor || null,
+      installPath,
+      installSource: 'rpm',
+      installPathReason: 'RPM metadata did not expose an installation prefix',
+    });
   });
 }
 
@@ -64,7 +89,7 @@ async function collectLinuxApplications({ run, signal }) {
   try {
     const output = await run(
       'dpkg-query',
-      ['-W', '-f=${binary:Package}\t${Version}\n'],
+      ['-W', '-f=${binary:Package}\t${Version}\t${Maintainer}\n'],
       { signal, timeoutMs: COMMAND_TIMEOUT_MS },
     );
     return sourceResult(parseDpkg(output), 'dpkg');
@@ -73,7 +98,7 @@ async function collectLinuxApplications({ run, signal }) {
     try {
       const output = await run(
         'rpm',
-        ['-qa', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\t%{ARCH}\n'],
+        ['-qa', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\t%{ARCH}\t%{VENDOR}\t%{PREFIXES}\n'],
         { signal, timeoutMs: COMMAND_TIMEOUT_MS },
       );
       return sourceResult(parseRpm(output), 'rpm');
@@ -120,22 +145,26 @@ function cleanWindowsExecutablePath(value) {
 async function collectWindowsApplications({ run, signal }) {
   try {
     const script = [
-      "$paths=@('HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*');",
-      'Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue',
-      '| Where-Object {$_.DisplayName}',
-      '| Select-Object DisplayName,DisplayVersion,InstallLocation,DisplayIcon',
+      "$paths=@(@{Path='HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*';Scope='per-machine'},@{Path='HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*';Scope='per-machine-32bit'},@{Path='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*';Scope='per-user'});",
+      '$records=foreach($entry in $paths){Get-ItemProperty -Path $entry.Path -ErrorAction SilentlyContinue | Where-Object {$_.DisplayName} | Select-Object DisplayName,DisplayVersion,InstallLocation,DisplayIcon,Publisher,WindowsInstaller,@{Name=\'RegistryScope\';Expression={$entry.Scope}}};',
+      '$records',
       '| ConvertTo-Json -Compress',
     ].join(' ');
     const output = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       signal,
       timeoutMs: COMMAND_TIMEOUT_MS,
     });
-    const items = parseJsonRecords(output).map((record) => appItem(
-      record.DisplayName,
-      record.DisplayVersion,
-      cleanWindowsExecutablePath(record.DisplayIcon),
-      'windows-uninstall-registry',
-    ));
+    const items = parseJsonRecords(output).map((record) => {
+      const binaryPath = cleanWindowsExecutablePath(record.DisplayIcon);
+      const installPath = record.InstallLocation || (binaryPath ? path.win32.dirname(binaryPath) : null);
+      const method = Number(record.WindowsInstaller) === 1 ? 'msi' : 'registry';
+      return appItem(record.DisplayName, record.DisplayVersion, binaryPath, 'windows-uninstall-registry', {
+        vendor: record.Publisher || null,
+        installPath,
+        installSource: `${method}:${record.RegistryScope || 'scope-unknown'}`,
+        installPathReason: 'Neither InstallLocation nor a usable DisplayIcon path was present',
+      });
+    });
     return sourceResult(items, 'windows-uninstall-registry');
   } catch (error) {
     if (error.name === 'AbortError') throw error;
@@ -191,15 +220,23 @@ async function collectMacApplications({ readDirectory, readTextFile, signal, sca
       const executable = metadata.CFBundleExecutable
         ? path.posix.join(bundlePath, 'Contents', 'MacOS', metadata.CFBundleExecutable)
         : null;
+      const bundleIdentifier = metadata.CFBundleIdentifier || null;
+      const derivedVendor = metadata.CFBundleVendor || metadata.NSHumanReadableCopyright
+        || (bundleIdentifier?.includes('.') ? bundleIdentifier.split('.').slice(0, -1).join('.') : null);
       items.push(appItem(
         metadata.CFBundleDisplayName || metadata.CFBundleName || fallbackName,
         metadata.CFBundleShortVersionString || metadata.CFBundleVersion,
         executable,
         'macos-app-bundles',
+        { vendor: derivedVendor, installPath: bundlePath, installSource: 'app-bundle' },
       ));
     } catch (error) {
       errors.push(`${fallbackName}: ${error.message}`);
-      items.push(appItem(fallbackName, null, null, 'macos-app-bundles'));
+      items.push(appItem(fallbackName, null, null, 'macos-app-bundles', {
+        installPath: bundlePath,
+        installSource: 'app-bundle',
+        vendorReason: `Info.plist could not be read: ${error.message}`,
+      }));
     }
   }
   return sourceResult(items, 'macos-app-bundles', errors.length ? errors.slice(0, 5).join('; ') : null, bundles.length);

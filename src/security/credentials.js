@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const serviceName = 'asvp-internal-network-agent';
 const accountName = 'agent-identity';
+const integrityAccountName = 'agent-integrity-baseline';
 
 let keytarLoadError = null;
 
@@ -108,11 +109,46 @@ export class CredentialStore {
     await writePrivateJson(this.identityPath, identity);
   }
 
+  async loadIntegrityBaseline() {
+    if (this.preferIdentityFile) {
+      try { return JSON.parse(await readFile(`${this.identityPath}.integrity.json`, 'utf8')); }
+      catch (error) { if (error.code !== 'ENOENT') throw new Error(`Unable to read local integrity baseline: ${error.message}`, { cause: error }); }
+    }
+    if (this.keychain) {
+      try {
+        const serialized = await this.keychain.getPassword(serviceName, integrityAccountName);
+        if (serialized) return JSON.parse(serialized);
+      } catch (error) {
+        this.logger?.warn({ err: error }, 'OS keychain integrity-baseline read failed; using restricted-file fallback');
+        this.keychain = null;
+      }
+    }
+    try { return JSON.parse(await readFile(`${this.identityPath}.integrity.json`, 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw new Error(`Unable to read local integrity baseline: ${error.message}`, { cause: error }); }
+  }
+
+  async saveIntegrityBaseline(baseline) {
+    if (!baseline || typeof baseline !== 'object') throw new Error('Cannot persist an invalid integrity baseline');
+    if (this.keychain) {
+      try {
+        await this.keychain.setPassword(serviceName, integrityAccountName, JSON.stringify(baseline));
+        if (this.preferIdentityFile) await writePrivateJson(`${this.identityPath}.integrity.json`, baseline);
+        return;
+      } catch (error) {
+        this.logger?.warn({ err: error }, 'OS keychain integrity-baseline write failed; using restricted-file fallback');
+        this.keychain = null;
+      }
+    }
+    await writePrivateJson(`${this.identityPath}.integrity.json`, baseline);
+  }
+
   async clearIdentity() {
     if (this.keychain) {
       try {
         await this.keychain.deletePassword(serviceName, accountName);
+        await this.keychain.deletePassword(serviceName, integrityAccountName);
         await rm(this.identityPath, { force: true });
+        await rm(`${this.identityPath}.integrity.json`, { force: true });
         return;
       } catch (error) {
         this.logger?.warn({ err: error }, 'OS keychain delete failed; clearing restricted identity file fallback');
@@ -120,5 +156,6 @@ export class CredentialStore {
       }
     }
     await rm(this.identityPath, { force: true });
+    await rm(`${this.identityPath}.integrity.json`, { force: true });
   }
 }

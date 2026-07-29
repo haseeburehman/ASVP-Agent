@@ -6,6 +6,7 @@ import { decodeResultEnvelope, generateAgentSecrets, hashToken } from './crypto.
 import { createDashboardSessions } from './dashboard-session.js';
 import { DEFAULT_TENANT_ID } from './database.js';
 import { computeFleetStatus } from './fleet-status.js';
+import { createNormalizationWorker } from './vulnerability/worker.js';
 import { canonicalizeTaskParams, deriveTaskSigningKey, signTaskEnvelope } from '../../src/security/task-envelope.js';
 
 const dashboardRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', 'dashboard');
@@ -60,6 +61,20 @@ function createAuthenticator(database) {
   };
 }
 function parseJson(value, fallback) { try { return JSON.parse(value); } catch { return fallback; } }
+const INTEGRITY_EVENT_TYPES = new Set(['binary-integrity-mismatch', 'config-integrity-mismatch']);
+function integrityEvents(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 10).flatMap((item) => {
+    if (!item || typeof item !== 'object' || !INTEGRITY_EVENT_TYPES.has(item.type)) return [];
+    return [{ type: item.type, details: {
+      target: typeof item.target === 'string' ? item.target : null,
+      path: typeof item.path === 'string' ? item.path : null,
+      expectedHash: typeof item.expectedHash === 'string' ? item.expectedHash : null,
+      actualHash: typeof item.actualHash === 'string' ? item.actualHash : null,
+      detectedAt: typeof item.detectedAt === 'string' ? item.detectedAt : null,
+    } }];
+  });
+}
 
 export function createApp({
   database,
@@ -77,6 +92,7 @@ export function createApp({
   logger = console,
   now = () => new Date(),
   rateNow = () => Date.now(),
+  normalizationWorker: suppliedNormalizationWorker,
 }) {
   if (typeof adminToken !== 'string' || !adminToken) throw new Error('createApp requires a non-empty adminToken');
   if (typeof taskSigningSecret !== 'string' || !taskSigningSecret) throw new Error('createApp requires a non-empty taskSigningSecret');
@@ -87,6 +103,8 @@ export function createApp({
   const dashboardSessions = suppliedDashboardSessions ?? createDashboardSessions({ adminToken, now: rateNow });
   const limiter = createRateLimiter({ ...adminRateLimit, now: rateNow });
   const knownFleetStates = new Map();
+  const normalizationWorker = suppliedNormalizationWorker ?? createNormalizationWorker({ database, logger });
+  normalizationWorker.enqueueMissing?.();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '25mb' }));
   app.use('/api/admin', limiter, createAdminAuthenticator(adminToken));
@@ -227,6 +245,10 @@ export function createApp({
       }
       const baselineTasks = identity.baselineTasks ?? [];
       delete identity.baselineTasks;
+      for (const integrityEvent of integrityEvents(body.integrityEvents)) {
+        event(identity.tenantId, identity.agentId, integrityEvent.type, integrityEvent.details);
+        logger.error({ event: integrityEvent.type, tenantId: identity.tenantId, agentId: identity.agentId, ...integrityEvent.details }, 'Agent reported an integrity mismatch during registration');
+      }
       logger.info({ event: 'register', agentId: identity.agentId, previousAgentId, continuity: continuityAuthorized ? 'reused-existing-agent' : 'new-agent', hostname, platform, architecture, baselineTaskCount: baselineTasks.length });
       knownFleetStates.set(identity.agentId, 'never-connected');
       fleetHub.broadcast({ type: 'agent-registered', agentId: identity.agentId, hostname, platform, architecture, continuity: continuityAuthorized, baselineTaskCount: baselineTasks.length });
@@ -258,6 +280,10 @@ export function createApp({
       const previousStatus = computeFleetStatus(request.agent, { now: now(), expectedHeartbeatIntervalMs }).state;
       updateHeartbeat.run(hostname, timestamp, body.agentVersion ?? null, agentId, request.agent.tenant_id);
       event(request.agent.tenant_id, agentId, 'heartbeat', { hostname, uptimeSeconds: body.uptimeSeconds ?? null, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null }, timestamp);
+      for (const integrityEvent of integrityEvents(body.integrityEvents)) {
+        event(request.agent.tenant_id, agentId, integrityEvent.type, integrityEvent.details, timestamp);
+        logger.error({ event: integrityEvent.type, tenantId: request.agent.tenant_id, agentId, ...integrityEvent.details }, 'Agent reported an integrity mismatch during heartbeat');
+      }
       fleetHub.broadcast({ type: 'heartbeat', agentId, hostname, receivedAt: timestamp, queueSize: body.currentQueueSize ?? null, agentVersion: body.agentVersion ?? null });
       if (previousStatus !== 'online') fleetHub.broadcast({ type: 'status-transition', agentId, from: previousStatus, to: 'online', occurredAt: timestamp });
       knownFleetStates.set(agentId, 'online');
@@ -323,6 +349,7 @@ export function createApp({
       });
       logger.info({ event: 'result', agentId, queueItemId, taskId, reportedTaskId, collector, status });
       response.json({ accepted: true, queueItemId });
+      normalizationWorker.enqueue({ resultId: queueItemId, tenantId, agentId });
     } catch (error) { next(error); }
   });
 
@@ -343,6 +370,56 @@ export function createApp({
       insertTask.run(taskId, tenantId, agentId, collectorName, JSON.stringify(params), timestamp);
       if (agentId) event(tenantId, agentId, 'task-created', { taskId, collectorName }, timestamp);
       response.status(201).json({ taskId, tenantId });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/admin/tenants/:tenantId/agents/:agentId/normalized-software', (request, response, next) => {
+    try {
+      const tenantId = requireString(request.params.tenantId, 'tenantId');
+      const agentId = requireString(request.params.agentId, 'agentId');
+      const agent = database.prepare('SELECT id FROM agents WHERE id = ? AND tenant_id = ?').get(agentId, tenantId);
+      if (!agent) throw httpError(404, 'Agent not found in tenant');
+      const software = database.prepare(`SELECT source_result_id, source_collector, raw_name, raw_version, vendor, product,
+        normalized_version, cpe23_candidate, match_confidence, match_method, normalized_at
+        FROM normalized_software WHERE tenant_id = ? AND agent_id = ? ORDER BY normalized_at DESC, source_result_id, ordinal`)
+        .all(tenantId, agentId).map((row) => ({
+          sourceResultId: row.source_result_id,
+          sourceCollector: row.source_collector,
+          rawName: row.raw_name,
+          rawVersion: row.raw_version,
+          vendor: row.vendor,
+          product: row.product,
+          version: row.normalized_version,
+          cpe23Candidate: row.cpe23_candidate,
+          matchConfidence: row.match_confidence,
+          matchMethod: row.match_method,
+          normalizedAt: row.normalized_at,
+        }));
+      response.json({ tenantId, agentId, software });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/admin/tenants/:tenantId/agents/:agentId/missing-patches', (request, response, next) => {
+    try {
+      const tenantId = requireString(request.params.tenantId, 'tenantId');
+      const agentId = requireString(request.params.agentId, 'agentId');
+      const agent = database.prepare('SELECT id FROM agents WHERE id = ? AND tenant_id = ?').get(agentId, tenantId);
+      if (!agent) throw httpError(404, 'Agent not found in tenant');
+      const patches = database.prepare(`SELECT source_result_id, advisory_id, severity, title, published_date, source,
+        source_url, confidence, rationale, feed_fetched_at, matched_at FROM missing_patches
+        WHERE tenant_id = ? AND agent_id = ? ORDER BY published_date DESC, advisory_id`)
+        .all(tenantId, agentId).map((row) => ({
+          sourceResultId: row.source_result_id, advisoryId: row.advisory_id, severity: row.severity,
+          title: row.title, publishedDate: row.published_date, source: row.source, sourceUrl: row.source_url,
+          confidence: row.confidence, rationale: row.rationale, feedFetchedAt: row.feed_fetched_at, matchedAt: row.matched_at,
+        }));
+      const feedCache = database.prepare(`SELECT feed_name, source_url, source_format, fetched_at, last_attempt_at, last_error,
+        json_array_length(advisories_json) AS advisory_count FROM patch_feed_cache ORDER BY feed_name`).all().map((row) => ({
+        feedName: row.feed_name, sourceUrl: row.source_url, sourceFormat: row.source_format,
+        fetchedAt: row.fetched_at, lastAttemptAt: row.last_attempt_at, lastError: row.last_error,
+        advisoryCount: row.advisory_count,
+      }));
+      response.json({ tenantId, agentId, assessment: 'advisory-based inference; not vendor confirmation', patches, feedCache });
     } catch (error) { next(error); }
   });
 
@@ -404,6 +481,7 @@ export function createApp({
   app.get('/fleet/agents/:agentId', dashboardPageAuth, dashboardPage);
 
   app.locals.dashboardSessions = dashboardSessions;
+  app.locals.normalizationWorker = normalizationWorker;
   app.locals.sweepFleetStatuses = () => {
     const timestamp = now();
     for (const agent of database.prepare('SELECT id, last_heartbeat_at, status, deregistered_at FROM agents').all()) {

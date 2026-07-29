@@ -52,6 +52,7 @@ Name: "{app}\var"; Permissions: users-modify
 Name: "{group}\ASVP Agent Command Prompt"; Filename: "{cmd}"; Parameters: "/K cd /d ""{app}"""
 
 [Run]
+Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" integrity rebaseline"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated
 Filename: "{app}\\{#MyExeName}"; Parameters: "--config ""{app}\\config\\default.json"" service install"; Description: "Install and start the ASVP Agent Windows service"; Flags: runhidden waituntilterminated; Check: ShouldInstallService
 
 [UninstallRun]

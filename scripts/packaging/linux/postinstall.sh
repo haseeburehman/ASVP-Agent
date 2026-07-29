@@ -21,12 +21,15 @@ if [ -n "$server_url" ]; then
   "$binary" --config "$config" enroll --input-file "$input_file"
   rm -f "$input_file" "$enrollment_file"
   printf '%s\n' 'ASVP Agent enrollment saved. Installing and starting its systemd service now.'
+  (cd /opt/asvp-agent && "$binary" --config "$config" integrity rebaseline)
   "$binary" --config "$config" service install
 elif ! grep -q 'management\.example\.invalid' "$config"; then
   rm -f "$enrollment_file"
   printf '%s\n' 'ASVP Agent installed with a baked management server URL. Installing and starting its systemd service now.'
+  (cd /opt/asvp-agent && "$binary" --config "$config" integrity rebaseline)
   "$binary" --config "$config" service install
 else
+  (cd /opt/asvp-agent && "$binary" --config "$config" integrity rebaseline)
   printf '%s\n' \
     'ASVP Agent installed but not started because no management server URL is configured.' \
     'Set ASVP_SERVER_URL during installation, or place the server URL and optional token on separate lines in /etc/asvp-agent/enrollment before installation.' \

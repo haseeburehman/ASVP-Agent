@@ -36,6 +36,25 @@ function unavailableField(reason) {
   return field(null, null, reason);
 }
 
+function securityMetadata(containerDetails, imageDetails) {
+  const configuredUser = String(containerDetails.Config?.User ?? '').trim();
+  const root = configuredUser === '' || configuredUser === '0' || configuredUser === 'root' || configuredUser.startsWith('0:');
+  const ports = Object.entries(containerDetails.NetworkSettings?.Ports ?? {}).flatMap(([containerPort, bindings]) => {
+    if (!Array.isArray(bindings) || bindings.length === 0) return [];
+    return bindings.map((binding) => ({ containerPort, hostIp: binding.HostIp || null, hostPort: binding.HostPort || null }));
+  });
+  const capAdd = Array.isArray(containerDetails.HostConfig?.CapAdd) ? containerDetails.HostConfig.CapAdd : [];
+  const broad = capAdd.some((capability) => String(capability).toUpperCase() === 'ALL');
+  const createdAt = imageDetails?.Created && !Number.isNaN(Date.parse(imageDetails.Created)) ? imageDetails.Created : null;
+  return {
+    privileged: field(Boolean(containerDetails.HostConfig?.Privileged), 'docker-container-inspect'),
+    mainProcessRunsAsRoot: field(root, 'docker-container-inspect', configuredUser ? null : 'Docker defaults an empty user setting to UID 0'),
+    exposedPorts: field(ports, 'docker-container-inspect'),
+    imageAge: createdAt ? field({ createdAt, ageDays: Math.max(0, Math.floor((Date.now() - Date.parse(createdAt)) / 86400000)) }, 'docker-image-inspect') : unavailableField('Docker image inspect did not expose a valid creation date'),
+    broadCapabilities: field({ capAdd, hasCapAddAll: broad }, 'docker-container-inspect'),
+  };
+}
+
 function classifyDockerError(error) {
   const text = `${error.code ?? ''} ${error.message ?? ''}`.toLowerCase();
   if (error.statusCode === 403 || /eacces|eperm|permission denied|access is denied/.test(text)) {
@@ -224,6 +243,11 @@ async function inspectRunningContainer(client, container, maxPackages, signal) {
       containerId,
       imageName,
       internalOs: unavailableField(reason),
+      privileged: unavailableField(reason),
+      mainProcessRunsAsRoot: unavailableField(reason),
+      exposedPorts: unavailableField(reason),
+      imageAge: unavailableField(reason),
+      broadCapabilities: unavailableField(reason),
       sbom: {
         packages: null,
         source: null,
@@ -249,6 +273,7 @@ async function inspectRunningContainer(client, container, maxPackages, signal) {
     containerId,
     imageName: containerDetails.Config?.Image || imageName,
     internalOs,
+    ...securityMetadata(containerDetails, imageDetails),
     sbom,
   };
 }

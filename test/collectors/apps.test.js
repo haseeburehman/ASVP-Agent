@@ -16,7 +16,7 @@ test('Linux adapter parses dpkg packages, systemd services, and correlates names
   const collector = createAppsCollector({
     platform: 'linux',
     runCommand: commandMock({
-      'dpkg-query': async () => 'nginx\t1.24.0\nopenssl\t3.0.0',
+      'dpkg-query': async () => 'nginx\t1.24.0\tDebian Nginx Maintainers\nopenssl\t3.0.0\tUbuntu Developers',
       systemctl: async () => [
         'nginx.service loaded active running nginx web server',
         'ssh.service loaded inactive dead OpenSSH server',
@@ -30,6 +30,10 @@ test('Linux adapter parses dpkg packages, systemd services, and correlates names
   assert.equal(data.applications.items[0].name, 'nginx');
   assert.equal(data.applications.items[0].version, '1.24.0');
   assert.equal(data.applications.items[0].binaryPath, null);
+  assert.equal(data.applications.items[0].vendor, 'Debian Nginx Maintainers');
+  assert.equal(data.applications.items[0].installPath, null);
+  assert.equal(data.applications.items[0].installSource, 'dpkg');
+  assert.equal(data.applications.items[0].detailAvailability.installPath.status, 'unavailable');
   assert.equal(data.applications.items[0].serviceStatus, 'running');
   assert.equal(data.applications.items[0].correlated, true);
   assert.equal(data.services.items[1].serviceStatus, 'stopped');
@@ -50,6 +54,9 @@ test('Windows adapter parses uninstall registry and Get-Service JSON', async () 
             DisplayVersion: '8.4.0',
             InstallLocation: 'C:\\Program Files\\MySQL',
             DisplayIcon: 'C:\\Program Files\\MySQL\\mysql.exe,0',
+            Publisher: 'Oracle Corporation',
+            WindowsInstaller: 1,
+            RegistryScope: 'per-machine',
           });
         }
         assert.match(script, /Get-Service/);
@@ -68,6 +75,9 @@ test('Windows adapter parses uninstall registry and Get-Service JSON', async () 
   assert.equal(data.applications.items[0].name, 'MySQL Server');
   assert.equal(data.applications.items[0].version, '8.4.0');
   assert.equal(data.applications.items[0].binaryPath, 'C:\\Program Files\\MySQL\\mysql.exe');
+  assert.equal(data.applications.items[0].vendor, 'Oracle Corporation');
+  assert.equal(data.applications.items[0].installPath, 'C:\\Program Files\\MySQL');
+  assert.equal(data.applications.items[0].installSource, 'msi:per-machine');
   assert.equal(data.applications.items[0].serviceStatus, 'running');
   assert.equal(data.services.items[0].serviceName, 'MySQL');
   assert.equal(data.services.items[0].binaryPath, 'C:\\Program Files\\MySQL\\mysqld.exe');
@@ -79,6 +89,7 @@ test('macOS adapter parses app bundle plists and launchctl services', async () =
     CFBundleDisplayName: 'Example App',
     CFBundleShortVersionString: '2.5.1',
     CFBundleExecutable: 'example-bin',
+    CFBundleIdentifier: 'com.example.desktop',
   });
   const collector = createAppsCollector({
     platform: 'darwin',
@@ -96,6 +107,9 @@ test('macOS adapter parses app bundle plists and launchctl services', async () =
   assert.equal(data.applications.items[0].name, 'Example App');
   assert.equal(data.applications.items[0].version, '2.5.1');
   assert.equal(data.applications.items[0].binaryPath, '/Applications/Example.app/Contents/MacOS/example-bin');
+  assert.equal(data.applications.items[0].vendor, 'com.example');
+  assert.equal(data.applications.items[0].installPath, '/Applications/Example.app');
+  assert.equal(data.applications.items[0].installSource, 'app-bundle');
   assert.equal(data.services.items[0].serviceStatus, 'running');
   assert.equal(data.services.items[1].serviceStatus, 'stopped');
 });

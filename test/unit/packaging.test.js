@@ -38,7 +38,8 @@ test('Windows uninstall deletes only the confirmed install tree while upgrades p
   const script = await readFile(path.join(root, 'scripts', 'packaging', 'windows', 'asvp-agent.iss'), 'utf8');
   assert.match(script, /DestName: "default\.json"; Flags: ignoreversion onlyifdoesntexist/);
     assert.match(script, /DestName: "asvp-agent-service\.exe"/);
-    assert.match(script, /service install";[^\n]*Flags: runhidden waituntilterminated/);
+    assert.match(script, /integrity rebaseline";[^\n]*WorkingDir: "\{app\}";[^\n]*waituntilterminated/);
+    assert.match(script, /integrity rebaseline[\s\S]*service install";[^\n]*Flags: runhidden waituntilterminated/);
     assert.doesNotMatch(script, /service install";[^\n]*postinstall/);
     assert.match(script, /service uninstall --remove-data/);
     assert.match(script, /#ifndef MyPreconfigured/);
@@ -60,8 +61,8 @@ test('Linux and macOS packages accept URL-only enrollment and remain stopped onl
     assert.match(script, /ASVP_SERVER_URL/);
     assert.match(script, /ASVP_ENROLLMENT_TOKEN/);
     assert.match(script, /if \[ -n "\$server_url" \]; then/);
-    assert.match(script, /enroll --input-file "\$input_file"[\s\S]*service install/);
-    assert.match(script, /installed with a baked management server URL[\s\S]*service install/);
+    assert.match(script, /enroll --input-file "\$input_file"[\s\S]*integrity rebaseline[\s\S]*service install/);
+    assert.match(script, /installed with a baked management server URL[\s\S]*integrity rebaseline[\s\S]*service install/);
     assert.match(script, /installed but not started because no management server URL is configured/);
     assert.match(script, /ASVP_ENROLLMENT_TOKEN is optional/);
   }

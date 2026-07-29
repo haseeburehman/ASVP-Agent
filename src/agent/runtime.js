@@ -44,6 +44,7 @@ export class AgentRuntime {
     onResult,
     resultStore,
     resultUploader,
+    integrityEvents = [],
     cwd = process.cwd(),
   }) {
     this.config = config;
@@ -56,6 +57,7 @@ export class AgentRuntime {
     this.persistChain = Promise.resolve();
     this.resultStore = resultStore;
     this.externalOnResult = onResult;
+    this.pendingIntegrityEvents = Array.isArray(integrityEvents) ? structuredClone(integrityEvents) : [];
     this.registry = registry ?? new CollectorRegistry();
     this.taskRateTracker = taskRateTracker ?? new TaskRateTracker(config.agent?.taskRateLimit);
     this.taskJournal = taskJournal ?? new TaskJournal({
@@ -230,11 +232,13 @@ export class AgentRuntime {
       lastSuccessfulHeartbeat: this.health.lastHeartbeatAt,
       currentQueueSize: this.health.queueDepth,
       agentVersion: this.version,
+      integrityEvents: this.pendingIntegrityEvents,
     };
     try {
       await this.apiClient.sendHeartbeat(this.identity, payload);
       this.health.lastHeartbeatAt = new Date().toISOString();
       this.health.lastHeartbeatError = null;
+      this.pendingIntegrityEvents = [];
       await this.#persistHealth();
       this.logger.info({
         agentId: this.identity.agentId,

@@ -65,6 +65,12 @@ const builtInDefinitions = {
     timeoutMs: 15000,
     concurrency: 1,
   },
+  services: {
+    modulePath: '../collectors/services/index.js',
+    implemented: true,
+    timeoutMs: 15000,
+    concurrency: 1,
+  },
   'network-config': {
     modulePath: '../collectors/network-config/index.js',
     implemented: true,

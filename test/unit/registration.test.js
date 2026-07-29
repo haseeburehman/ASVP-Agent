@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -33,6 +33,16 @@ function createApiClientMock() {
     },
   };
 }
+
+test('integrity baseline uses a separate restricted 0600 file when keychain is unavailable', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'asvp-integrity-store-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await new CredentialStore({ identityPath: 'identity.json', keychain: null, logger: { warn() {} }, cwd: directory }).initialize();
+  const baseline = { schemaVersion: 1, hashes: { binary: { sha256: 'a'.repeat(64) } } };
+  await store.saveIntegrityBaseline(baseline);
+  assert.deepEqual(await store.loadIntegrityBaseline(), baseline);
+  const serialized = await readFile(path.join(directory, 'identity.json.integrity.json'), 'utf8');
+  assert.equal(JSON.parse(serialized).hashes.binary.sha256, 'a'.repeat(64));
+});
 
 test('HTTP startup fails clearly before registration when the server URL is missing', async () => {
   const errors = [];

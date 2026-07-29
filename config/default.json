@@ -102,6 +102,13 @@
     "process-summary": {
       "timeoutMs": 15000,
       "concurrency": 1,
+      "maxItems": 250,
+      "maxHashedProcesses": 25,
+      "maxHashFileBytes": 209715200
+    },
+    "services": {
+      "timeoutMs": 15000,
+      "concurrency": 1,
       "maxItems": 250
     },
     "network-config": {

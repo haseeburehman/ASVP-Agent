@@ -17,9 +17,13 @@ function createMockClient(overrides = {}) {
     async listRunningContainers() { return running; },
     async inspectContainer(containerId) {
       const source = running.find((item) => item.Id === containerId);
-      return { Image: `sha256:${containerId}`, Platform: 'linux', Config: { Image: source.Image } };
+      return {
+        Image: `sha256:${containerId}`, Platform: 'linux', Config: { Image: source.Image, User: '' },
+        HostConfig: { Privileged: containerId === 'container-1', CapAdd: containerId === 'container-1' ? ['ALL'] : ['NET_BIND_SERVICE'] },
+        NetworkSettings: { Ports: { '443/tcp': [{ HostIp: '127.0.0.1', HostPort: '8443' }] } },
+      };
     },
-    async inspectImage() { return { Os: 'linux' }; },
+    async inspectImage() { return { Os: 'linux', Created: '2026-01-01T00:00:00Z' }; },
     async execReadOnly(_containerId, command) {
       if (command === LINUX_OS_COMMAND) return 'PRETTY_NAME="Ubuntu 24.04 LTS"\nVERSION_ID="24.04"';
       if (command === LINUX_PACKAGES_COMMAND) {
@@ -47,6 +51,11 @@ test('containers collector inspects running Docker containers through the mocked
   assert.equal(result.containers[0].internalOs.reason, null);
   assert.equal(result.containers[0].sbom.packages.length, 3);
   assert.equal(result.containers[0].sbom.packages[0].name, 'libc6');
+  assert.equal(result.containers[0].privileged.value, true);
+  assert.equal(result.containers[0].mainProcessRunsAsRoot.value, true);
+  assert.equal(result.containers[0].exposedPorts.value[0].hostPort, '8443');
+  assert.equal(result.containers[0].broadCapabilities.value.hasCapAddAll, true);
+  assert.equal(result.containers[0].imageAge.value.createdAt, '2026-01-01T00:00:00Z');
 });
 
 test('maxPackagesPerContainer caps package output and reports truncation', async () => {
@@ -92,7 +101,7 @@ test('exec failures degrade internal OS and package fields independently', async
     client: createMockClient({
       async listRunningContainers() { return [{ Id: 'minimal', Image: 'distroless:latest' }]; },
       async inspectContainer() {
-        return { Image: 'sha256:minimal', Platform: 'linux', Config: { Image: 'distroless:latest' } };
+        return { Image: 'sha256:minimal', Platform: 'linux', Config: { Image: 'distroless:latest', User: '1000' }, HostConfig: { Privileged: false, CapAdd: [] }, NetworkSettings: { Ports: {} } };
       },
       async execReadOnly(_id, command) {
         if (command === LINUX_OS_COMMAND) throw new Error('/bin/sh not found');
@@ -110,6 +119,8 @@ test('exec failures degrade internal OS and package fields independently', async
   assert.match(result.containers[0].internalOs.reason, /\/bin\/sh not found/);
   assert.equal(result.containers[0].sbom.packages, null);
   assert.match(result.containers[0].sbom.reason, /no supported package manager/);
+  assert.equal(result.containers[0].mainProcessRunsAsRoot.value, false);
+  assert.equal(result.containers[0].privileged.value, false);
 });
 
 test('fixed inspection commands contain no task or container-derived input', () => {

@@ -6,9 +6,10 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { AgentLifecycle } from '../agent/lifecycle.js';
 import { readStatus } from '../agent/runtime.js';
 import { parseOperatorCommand, runManualScan } from '../cli/commands.js';
-import { loadConfig } from '../config/loader.js';
+import { defaultConfigPath, loadConfig } from '../config/loader.js';
 import { CollectorRegistry } from '../core/collector-registry.js';
 import { CredentialStore } from '../security/credentials.js';
+import { IntegrityService } from '../security/integrity.js';
 import { ApiClient, loadOrRegisterIdentity } from '../transport/api-client.js';
 import { createLogger, flushLogger } from '../utils/logger.js';
 
@@ -72,6 +73,7 @@ export class DashboardServer {
     token = randomBytes(32).toString('base64url'),
     cwd = process.cwd(),
     overridePath = DEFAULT_OVERRIDE_PATH,
+    configPath,
     lifecycleFactory,
     registry = new CollectorRegistry(),
     fetchImpl = fetch,
@@ -82,6 +84,7 @@ export class DashboardServer {
     this.token = token;
     this.cwd = cwd;
     this.overridePath = path.resolve(cwd, overridePath);
+    this.configPath = configPath ? path.resolve(cwd, configPath) : defaultConfigPath;
     this.lifecycleFactory = lifecycleFactory ?? ((options) => new AgentLifecycle(options));
     this.registry = registry;
     this.fetchImpl = fetchImpl;
@@ -152,6 +155,7 @@ export class DashboardServer {
     if (this.lifecycle?.getHealth().state === 'running') return this.lifecycle.getHealth();
     this.lifecycle = this.lifecycleFactory({
       config: this.config,
+      configPath: this.configPath,
       version: this.version,
       logger: this.logger,
       cwd: this.cwd,
@@ -304,6 +308,10 @@ export class DashboardServer {
     const next = applyEditableConfig(this.config, update);
     await atomicWriteConfig(this.overridePath, next);
     this.config = await loadConfig({ configPath: this.overridePath, cwd: this.cwd });
+    this.configPath = this.overridePath;
+    const credentialStore = await new CredentialStore({ identityPath: this.config.storage.identityPath, logger: this.logger, cwd: this.cwd }).initialize();
+    await new IntegrityService({ credentialStore, configPath: this.configPath, identityPath: this.config.storage.identityPath, logger: this.logger, cwd: this.cwd })
+      .rebaseline(['config'], 'dashboard-config-write');
     this.broadcast({ type: 'config', data: editableConfig(this.config), requiresRestart: true });
     return { overridePath: this.overridePath, config: editableConfig(this.config), serverChanged };
   }
@@ -364,7 +372,7 @@ export async function startDashboardCommand({ configPath } = {}) {
   const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   let dashboard;
   const logger = createLogger({ level: config.agent.logLevel, onLog: (record) => dashboard?.pushLog(record) });
-  dashboard = new DashboardServer({ config, logger, version, cwd });
+  dashboard = new DashboardServer({ config, configPath: configPath ?? defaultConfigPath, logger, version, cwd });
   await dashboard.start({ startAgent: true });
   const url = `http://${config.dashboard.bindAddress}:${dashboard.port}/?token=${encodeURIComponent(dashboard.token)}`;
   process.stdout.write(`\nASVP dashboard access URL (shown once):\n${url}\n\n`);

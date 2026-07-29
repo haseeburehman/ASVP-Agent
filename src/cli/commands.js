@@ -5,11 +5,12 @@ import { Command } from 'commander';
 import { AgentLifecycle } from '../agent/lifecycle.js';
 import { readStatus } from '../agent/runtime.js';
 
-import { loadConfig } from '../config/loader.js';
+import { defaultConfigPath, loadConfig } from '../config/loader.js';
 import { CollectorRegistry } from '../core/collector-registry.js';
 import { TaskRunner } from '../core/task-runner.js';
 import { runEnrollment } from '../enrollment/index.js';
 import { CredentialStore } from '../security/credentials.js';
+import { IntegrityService } from '../security/integrity.js';
 import { ResultStore } from '../storage/result-store.js';
 import { runServiceCommand } from '../service/index.js';
 import { ApiClient, loadOrRegisterIdentity } from '../transport/api-client.js';
@@ -23,7 +24,7 @@ async function getVersion() {
 async function createContext(options) {
   const config = await loadConfig({ configPath: options.config });
   const logger = createLogger({ level: config.agent.logLevel });
-  return { config, logger, version: await getVersion() };
+  return { config, logger, version: await getVersion(), configPath: options.config ? path.resolve(options.config) : defaultConfigPath };
 }
 
 
@@ -193,7 +194,22 @@ export function createProgram({ contextFactory = createContext } = {}) {
             }
           }
           const result = await runEnrollment({ configPath, serverUrl, enrollmentToken });
-      process.stdout.write(`Enrollment saved to ${result.configPath}\n`);
+          const { config, logger } = await contextFactory({ config: result.configPath });
+          const credentialStore = await new CredentialStore({ identityPath: config.storage.identityPath, logger }).initialize();
+          await new IntegrityService({ credentialStore, configPath: result.configPath, identityPath: config.storage.identityPath, logger }).rebaseline(['config'], 'enrollment-write');
+          process.stdout.write(`Enrollment saved to ${result.configPath}\n`);
+    });
+
+  const integrity = program.command('integrity').description('manage local agent integrity baselines');
+  integrity.command('rebaseline')
+    .description('explicitly trust the currently installed binary, config, and identity after an authorized install or upgrade')
+    .action(async (_, command) => {
+      const { config: configPath } = command.optsWithGlobals();
+      const context = await contextFactory({ config: configPath });
+      const credentialStore = await new CredentialStore({ identityPath: context.config.storage.identityPath, logger: context.logger }).initialize();
+      const baseline = await new IntegrityService({ credentialStore, configPath: context.configPath, identityPath: context.config.storage.identityPath, logger: context.logger })
+        .rebaseline(['binary', 'config', 'identity'], 'authorized-install-or-upgrade');
+      process.stdout.write(`Integrity baseline established at ${baseline.establishedAt}\n`);
     });
 
   program.command('register')
@@ -213,6 +229,7 @@ export function createProgram({ contextFactory = createContext } = {}) {
           force: true,
           metadata: { enrollmentToken: config.server.enrollmentToken, agentVersion: version },
         });
+        await new IntegrityService({ credentialStore, configPath, identityPath: config.storage.identityPath, logger }).rebaseline(['identity'], 'normal-identity-write');
         logger.info({ agentId: identity.agentId }, 'Agent registration replaced');
       } finally {
         await flushLogger(logger);

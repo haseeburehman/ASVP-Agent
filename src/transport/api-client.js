@@ -159,7 +159,7 @@ export async function loadOrRegisterIdentity({ credentialStore, apiClient, force
     if (typeof validateExisting !== 'function') return { identity: existing, registered: false };
     try {
       await validateExisting(existing);
-      return { identity: existing, registered: false };
+      return { identity: existing, registered: false, validated: true };
     } catch (error) {
       if (error?.code === 'IDENTITY_FINGERPRINT_MISMATCH') throw error;
       if (![401, 403].includes(Number(error?.status))) {

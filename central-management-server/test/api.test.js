@@ -75,6 +75,20 @@ test('registration returns exact identity shape and stores only the token hash',
   assert.notEqual(row.auth_token_hash, identity.authToken);
 });
 
+test('registration and heartbeat persist tenant-bound integrity mismatch events', async (t) => {
+  const { database, api } = setup(); t.after(() => database.close());
+  const registrationEvent = { type: 'binary-integrity-mismatch', target: 'binary', path: '/opt/asvp-agent/asvp-agent', expectedHash: 'a'.repeat(64), actualHash: 'b'.repeat(64), detectedAt: new Date().toISOString() };
+  const identity = await register(api, { integrityEvents: [registrationEvent] });
+  await api.post('/api/agents/heartbeat').set('Authorization', `Bearer ${identity.authToken}`).send({
+    agentId: identity.agentId, hostname: 'test-host', machineFingerprint: MACHINE_FINGERPRINT,
+    integrityEvents: [{ ...registrationEvent, type: 'config-integrity-mismatch', target: 'config' }],
+  }).expect(200);
+  const rows = database.prepare("SELECT tenant_id, agent_id, event_type, details FROM agent_events WHERE event_type LIKE '%integrity-mismatch' ORDER BY id").all();
+  assert.deepEqual(rows.map((row) => row.event_type), ['binary-integrity-mismatch', 'config-integrity-mismatch']);
+  assert.ok(rows.every((row) => row.tenant_id === DEFAULT_TENANT_ID && row.agent_id === identity.agentId));
+  assert.equal(JSON.parse(rows[1].details).target, 'config');
+});
+
 test('registration reuses a known previousAgentId and rotates credentials in one row', async (t) => {
   const { database, api } = setup();
   t.after(() => database.close());

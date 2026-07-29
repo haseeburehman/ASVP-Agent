@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { createDatabase } from './database.js';
 import { createDashboardSessions } from './dashboard-session.js';
 import { createFleetWebSocketHub } from './fleet-websocket.js';
+import { createPatchFeedCache, DEFAULT_PATCH_FEED_REFRESH_INTERVAL_MS } from './vulnerability/patch-feed-cache.js';
 
 const host = process.env.ASVP_SERVER_HOST ?? '127.0.0.1';
 const port = Number(process.env.ASVP_SERVER_PORT ?? 8080);
@@ -14,10 +15,14 @@ const taskSigningKeyId = process.env.TASK_SIGNING_KEY_ID ?? 'v1';
 const expectedHeartbeatIntervalMs = Number(process.env.EXPECTED_HEARTBEAT_INTERVAL_MS ?? 30000);
 const baselineRescanIntervalMs = Number(process.env.BASELINE_RESCAN_INTERVAL_MS ?? 86400000);
 const requireEnrollmentToken = process.env.REQUIRE_ENROLLMENT_TOKEN === 'true';
+const patchFeedRefreshIntervalMs = Number(process.env.PATCH_FEED_REFRESH_INTERVAL_MS ?? DEFAULT_PATCH_FEED_REFRESH_INTERVAL_MS);
+const patchBackfillIntervalMs = Number(process.env.PATCH_BACKFILL_INTERVAL_MS ?? 60 * 60 * 1000);
 if (typeof taskSigningSecret !== 'string' || !taskSigningSecret) throw new Error('TASK_SIGNING_SECRET must be set');
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ASVP_SERVER_PORT must be a valid TCP port');
 if (!Number.isInteger(expectedHeartbeatIntervalMs) || expectedHeartbeatIntervalMs < 100) throw new Error('EXPECTED_HEARTBEAT_INTERVAL_MS must be at least 100');
 if (!Number.isInteger(baselineRescanIntervalMs) || baselineRescanIntervalMs < 60000) throw new Error('BASELINE_RESCAN_INTERVAL_MS must be at least 60000');
+if (!Number.isInteger(patchFeedRefreshIntervalMs) || patchFeedRefreshIntervalMs < 60000) throw new Error('PATCH_FEED_REFRESH_INTERVAL_MS must be at least 60000');
+if (!Number.isInteger(patchBackfillIntervalMs) || patchBackfillIntervalMs < 60000) throw new Error('PATCH_BACKFILL_INTERVAL_MS must be at least 60000');
 
 const database = createDatabase({ filename: databasePath });
 const dashboardSessions = createDashboardSessions({ adminToken });
@@ -46,12 +51,25 @@ const server = app.listen(port, host, () => {
   }
 });
 fleetHub.attach(server);
+const patchFeedCache = createPatchFeedCache({ database, logger: console });
+patchFeedCache.refreshDue(patchFeedRefreshIntervalMs)
+  .then(() => app.locals.normalizationWorker.enqueueMissing())
+  .catch((error) => console.error({ event: 'patch-feed-refresh-cycle-failed', error: error.message }));
+const patchFeedRefresh = setInterval(() => patchFeedCache.refreshDue(patchFeedRefreshIntervalMs)
+  .then((result) => { if (result) app.locals.normalizationWorker.enqueueMissing(); })
+  .catch((error) => console.error({ event: 'patch-feed-refresh-cycle-failed', error: error.message })), patchFeedRefreshIntervalMs);
+patchFeedRefresh.unref();
+const patchBackfill = setInterval(() => app.locals.normalizationWorker.enqueueMissing(), patchBackfillIntervalMs);
+patchBackfill.unref();
 const statusSweep = setInterval(() => app.locals.sweepFleetStatuses(), Math.min(expectedHeartbeatIntervalMs, 5000));
 statusSweep.unref();
 
 async function shutdown(signal) {
   console.info({ event: 'server-stopping', signal });
   clearInterval(statusSweep);
+  clearInterval(patchFeedRefresh);
+  clearInterval(patchBackfill);
+  await app.locals.normalizationWorker.drain();
   await fleetHub.close();
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   database.close();

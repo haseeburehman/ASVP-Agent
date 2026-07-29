@@ -1,13 +1,14 @@
 import os from 'node:os';
 import { ApiClient, loadOrRegisterIdentity } from '../transport/api-client.js';
 import { CredentialStore } from '../security/credentials.js';
+import { IntegrityService } from '../security/integrity.js';
 import { ResultStore } from '../storage/result-store.js';
 import { AgentRuntime } from './runtime.js';
 import { PLACEHOLDER_SERVER_URL } from '../enrollment/index.js';
 import { createLogger, flushLogger } from '../utils/logger.js';
 
 export class AgentLifecycle {
-  constructor({ config, version, logger, apiClient, credentialStore, resultStore, resultUploader, onResult, cwd = process.cwd() }) {
+  constructor({ config, configPath, version, logger, apiClient, credentialStore, integrityService, resultStore, resultUploader, onResult, cwd = process.cwd() }) {
     this.config = config;
     this.version = version;
     this.logger = logger ?? createLogger({ level: config.agent.logLevel });
@@ -17,6 +18,8 @@ export class AgentLifecycle {
       logger: this.logger,
       cwd,
     });
+    this.integrityService = integrityService;
+    this.configPath = configPath;
     this.resultStore = resultStore ?? new ResultStore({
       queueDir: config.storage.queueDir,
       maxQueueSizeBytes: config.storage.maxQueueSizeBytes,
@@ -33,12 +36,28 @@ export class AgentLifecycle {
 
   async start() {
     await this.credentialStore.initialize();
+    if (!this.integrityService && typeof this.credentialStore.loadIntegrityBaseline === 'function' && typeof this.credentialStore.saveIntegrityBaseline === 'function') {
+      this.integrityService = new IntegrityService({ credentialStore: this.credentialStore, configPath: this.configPath,
+        identityPath: this.config.storage.identityPath, logger: this.logger, cwd: this.cwd });
+    }
+    const integrityCheck = this.integrityService
+      ? await this.integrityService.verifyOrEstablish(['binary', 'config', 'identity'])
+      : { events: [] };
+    const integrityEvents = integrityCheck.events;
+    for (const integrityEvent of integrityEvents) this.logger.error({
+      event: integrityEvent.type,
+      target: integrityEvent.target,
+      path: integrityEvent.path,
+      expectedHash: integrityEvent.expectedHash,
+      actualHash: integrityEvent.actualHash,
+    }, 'SECURITY ALERT: agent integrity verification failed; continuing startup to preserve reporting and avoid denial of service');
     const metadata = {
       hostname: os.hostname(),
       platform: process.platform,
       architecture: process.arch,
       agentVersion: this.version,
       enrollmentToken: this.config.server.enrollmentToken,
+      integrityEvents,
     };
     const existingIdentity = await this.credentialStore.loadIdentity();
     const hasCompleteIdentity = existingIdentity?.agentId && existingIdentity?.tenantId
@@ -51,7 +70,7 @@ export class AgentLifecycle {
       this.logger.error({ reasonCode: 'SERVER_URL_NOT_CONFIGURED' }, message);
       throw new Error(message);
     }
-    const { identity, registered } = await loadOrRegisterIdentity({
+    const { identity, registered, validated } = await loadOrRegisterIdentity({
       credentialStore: this.credentialStore,
       apiClient: this.apiClient,
       metadata,
@@ -61,8 +80,10 @@ export class AgentLifecycle {
         hostname: metadata.hostname,
         agentVersion: this.version,
         startupCredentialValidation: true,
+        integrityEvents,
       }),
     });
+    if (registered) await this.integrityService?.rebaseline(['identity'], 'normal-identity-write');
     this.logger.info({ agentId: identity.agentId, registered }, registered ? 'Agent registered' : 'Loaded existing agent identity');
 
     this.resultStore.setEncryptionKey(identity.encryptionKey);
@@ -79,6 +100,7 @@ export class AgentLifecycle {
       resultStore: this.resultStore,
       resultUploader: this.resultUploader,
       onResult: this.onResult,
+      integrityEvents: registered || validated ? [] : integrityEvents,
       cwd: this.cwd,
     });
     this.#installSignalHandlers();

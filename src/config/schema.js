@@ -123,6 +123,18 @@ export const configSchema = {
         },
         'process-summary': {
           type: 'object',
+          required: ['timeoutMs', 'concurrency', 'maxItems', 'maxHashedProcesses', 'maxHashFileBytes'],
+          properties: {
+            timeoutMs: { type: 'integer', minimum: 1 },
+            concurrency: { type: 'integer', minimum: 1 },
+            maxItems: { type: 'integer', minimum: 1 },
+            maxHashedProcesses: { type: 'integer', minimum: 0, maximum: 250 },
+            maxHashFileBytes: { type: 'integer', minimum: 1, maximum: 1073741824 },
+          },
+        },
+        services: {
+          type: 'object',
+          additionalProperties: false,
           required: ['timeoutMs', 'concurrency', 'maxItems'],
           properties: {
             timeoutMs: { type: 'integer', minimum: 1 },
@@ -192,6 +204,8 @@ export const configSchema = {
           maxManifests: { type: 'integer', minimum: 1 },
           maxContainers: { type: 'integer', minimum: 1 },
           maxPackagesPerContainer: { type: 'integer', minimum: 1 },
+          maxHashedProcesses: { type: 'integer', minimum: 0, maximum: 250 },
+          maxHashFileBytes: { type: 'integer', minimum: 1, maximum: 1073741824 },
 
           commandTimeoutMs: { type: 'integer', minimum: 1 },
                     patchCheckTimeoutMs: { type: 'integer', minimum: 1 },
