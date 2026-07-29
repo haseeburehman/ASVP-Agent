@@ -55,6 +55,16 @@ test('Windows uninstall deletes only the confirmed install tree while upgrades p
   assert.doesNotMatch(script, /\[UninstallDelete\][\s\S]*Name: "(?:\{autopf\}|[A-Z]:\\|\\\\)/i);
 });
 
+test('Linux package installs the immutable default and mutable config overlay required by the loader', async () => {
+  const workflow = await readFile(path.join(root, '.github', 'workflows', 'build-release.yml'), 'utf8');
+  const postinstall = await readFile(path.join(root, 'scripts', 'packaging', 'linux', 'postinstall.sh'), 'utf8');
+  assert.match(workflow, /install -Dm644 dist\/linux-x64\/config\/default\.json "\$root\/opt\/asvp-agent\/config\/default\.json"/);
+  assert.match(workflow, /install -Dm640 dist\/linux-x64\/config\/default\.json "\$root\/etc\/asvp-agent\/config\.json"/);
+  assert.match(workflow, /--config-files \/etc\/asvp-agent\/config\.json/);
+  assert.match(postinstall, /config=\/etc\/asvp-agent\/config\.json/);
+  assert.match(postinstall, /"\$binary" --config "\$config" service install/);
+});
+
 test('Linux and macOS packages accept URL-only enrollment and remain stopped only without a URL', async () => {
   for (const relativePath of ['scripts/packaging/linux/postinstall.sh', 'scripts/packaging/macos/postinstall']) {
     const script = await readFile(path.join(root, relativePath), 'utf8');

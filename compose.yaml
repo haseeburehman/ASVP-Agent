@@ -1,0 +1,53 @@
+services:
+  central-server:
+    build:
+      context: .
+      dockerfile: central-management-server/Dockerfile
+    environment:
+      ASVP_SERVER_HOST: 0.0.0.0
+      ASVP_SERVER_PORT: 5040
+      ASVP_DATABASE_PATH: /data/management.sqlite
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?ADMIN_TOKEN is required}
+      TASK_SIGNING_SECRET: ${TASK_SIGNING_SECRET:?TASK_SIGNING_SECRET is required}
+      DASHBOARD_SECURE_COOKIE: "true"
+    volumes:
+      - central-data:/data
+    expose:
+      - "5040"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5040/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    command: ["http", "--url=https://${NGROK_DOMAIN:?NGROK_DOMAIN is required}", "central-server:5040"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?NGROK_AUTHTOKEN is required}
+    depends_on:
+      central-server:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4040:4040"
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+    command: ["--config", "./docker/agent.json", "run"]
+    volumes:
+      - agent-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      central-server:
+        condition: service_healthy
+      ngrok:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  central-data:
+  agent-data:

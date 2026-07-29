@@ -1,0 +1,11 @@
+node_modules
+central-management-server/node_modules
+.git
+.github
+var
+dist
+coverage
+.env
+.env.*
+*.log
+central-management-server/var

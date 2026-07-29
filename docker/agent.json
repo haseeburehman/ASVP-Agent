@@ -1,0 +1,18 @@
+{
+  "server": {
+    "mode": "http",
+    "url": "https://filthily-predoubtful-kathryne.ngrok-free.dev"
+  },
+  "dashboard": {
+    "enabled": false,
+    "port": 4180,
+    "bindAddress": "127.0.0.1"
+  },
+  "storage": {
+    "identityPath": "/data/identity.json",
+    "statusPath": "/data/status.json",
+    "taskReplayLedgerPath": "/data/task-replay-ledger.json",
+    "taskJournalPath": "/data/task-journal.json",
+    "queueDir": "/data/queue"
+  }
+}

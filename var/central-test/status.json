@@ -1,0 +1,20 @@
+{
+  "state": "running",
+  "agentId": "2e738498-2ff3-4125-bc85-68574110b9b7",
+  "tenantId": "00000000-0000-4000-8000-000000000000",
+  "lastHeartbeatAt": "2026-07-29T07:01:19.593Z",
+  "lastHeartbeatError": null,
+  "lastPollAt": "2026-07-29T07:01:19.610Z",
+  "lastPollError": null,
+  "lastTaskResult": null,
+  "queueDepth": 0,
+  "queueEvictedCount": 0,
+  "queueLastEvictedAt": null,
+  "failedPermanentCount": 0,
+  "failedPermanentRetainUntil": null,
+  "consecutiveUploadAuthFailures": 0,
+  "authFailureThreshold": 5,
+  "healthState": "healthy",
+  "updatedAt": "2026-07-29T07:01:19.611Z",
+  "agentVersion": "1.4.1"
+}

@@ -1,4 +1,9 @@
 import { applicationMetrics, describeCheck, latestCollectorState } from './posture-data.js';
+import {
+  renderContainers, renderCredentialExposure, renderDiskSecurity, renderFilePermissions,
+  renderHardwareInfo, renderKernelHardening, renderMissingPatches, renderNetworkConfig,
+  renderProcessSummary, renderScaDeps, renderServices,
+} from './posture-renderers.js';
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -92,9 +97,13 @@ async function loadFleet() {
   renderFleetTable();
 }
 
-const postureIcons = { os: '▣', apps: '◇', users: '♙', antivirus: '◆', compliance: '⬡' };
-function postureCard(key, title, status, body, raw) {
-  return `<article class="posture-card state-${escapeHtml(status)}"><div class="posture-heading"><span class="posture-icon">${postureIcons[key]}</span><div><p class="eyebrow">${escapeHtml(status)}</p><h3>${escapeHtml(title)}</h3></div><span class="posture-state">${escapeHtml(status)}</span></div><div class="posture-body">${body}</div><details class="raw-toggle"><summary>View raw JSON</summary>${jsonBlock(raw)}</details></article>`;
+const postureIcons = {
+  os: '▣', apps: '◇', users: '♙', antivirus: '◆', compliance: '⬡', disk: '◫', hardware: '▤',
+  kernel: '⛨', services: '⚙', processes: '◉', files: '▧', credentials: '⚿', network: '⌁',
+  containers: '⬢', dependencies: '⌘', patches: '✦',
+};
+function postureCard(key, title, status, body, raw, { fullWidth = false } = {}) {
+  return `<article class="posture-card state-${escapeHtml(status)}${fullWidth ? ' full-width' : ''}"><div class="posture-heading"><span class="posture-icon">${postureIcons[key]}</span><div><p class="eyebrow">${escapeHtml(status)}</p><h3>${escapeHtml(title)}</h3></div><span class="posture-state">${escapeHtml(status)}</span></div><div class="posture-body">${body}</div><details class="raw-toggle"><summary>View raw JSON</summary>${jsonBlock(raw)}</details></article>`;
 }
 
 function postureBody(entry, content = '') {
@@ -103,7 +112,7 @@ function postureBody(entry, content = '') {
   if (entry.state === 'pending') return '<p>Waiting for baseline result.</p>';
   if (entry.state === 'failed') return error || '<p>The baseline task failed before returning a result.</p>';
   if (entry.state === 'missing') return '<p>The baseline task completed without a result.</p>';
-  return '<p>No baseline task has been scheduled.</p>';
+  return '<div class="availability-state"><strong>Not yet collected</strong><span>No result exists for this collector yet.</span></div>';
 }
 
 function renderPosture(results, tasks) {
@@ -112,6 +121,18 @@ function renderPosture(results, tasks) {
   const usersEntry = latestCollectorState(results, tasks, 'users-groups');
   const antivirusEntry = latestCollectorState(results, tasks, 'antivirus-status');
   const complianceEntry = latestCollectorState(results, tasks, 'compliance-checks');
+  const extraCollectors = [
+    ['disk', 'Disk security', 'disk-security', renderDiskSecurity, false],
+    ['hardware', 'Hardware identity', 'hardware-info', renderHardwareInfo, false],
+    ['kernel', 'Kernel hardening', 'kernel-hardening', renderKernelHardening, false],
+    ['services', 'Running services', 'services', renderServices, true],
+    ['processes', 'Process security', 'process-summary', renderProcessSummary, true],
+    ['files', 'File permissions', 'file-permissions', renderFilePermissions, false],
+    ['credentials', 'Credential exposure', 'credential-exposure', renderCredentialExposure, false],
+    ['network', 'Network configuration', 'network-config', renderNetworkConfig, false],
+    ['containers', 'Container security', 'containers', renderContainers, false],
+    ['dependencies', 'Software dependencies', 'sca-deps', renderScaDeps, true],
+  ];
   const os = osEntry.payload; const apps = appsEntry.payload; const users = usersEntry.payload;
   const antivirus = antivirusEntry.payload; const compliance = complianceEntry.payload;
   const appMetrics = applicationMetrics(apps);
@@ -127,6 +148,11 @@ function renderPosture(results, tasks) {
     postureCard('users', 'Users & privileged groups', usersEntry.state, postureBody(usersEntry, users ? `<p><strong>${userItems.length}</strong> local users · <strong>${groups.length}</strong> groups</p>${accountStatusWarning}${privileged.map((group) => `<p><b>${escapeHtml(group.name)}:</b> ${escapeHtml((group.members ?? []).map((member) => typeof member === 'string' ? member : member.name).join(', ') || 'No explicit members')}</p>`).join('') || '<p>No standard privileged group was reported.</p>'}` : ''), usersEntry.result ?? usersEntry.task),
     postureCard('antivirus', 'Antivirus / endpoint protection', antivirusEntry.state, postureBody(antivirusEntry, antivirus ? `<p>${escapeHtml(antivirus.reason ?? 'Status reported successfully.')}</p><ul>${(antivirus.products ?? []).map((product) => `<li>${escapeHtml(product.name)} — ${product.enabled === true ? 'enabled' : product.enabled === false ? 'disabled' : 'state unknown'}</li>`).join('')}</ul>` : ''), antivirusEntry.result ?? antivirusEntry.task),
     postureCard('compliance', 'Firewall & compliance', complianceEntry.state, postureBody(complianceEntry, compliance ? `<dl><dt>Firewall</dt><dd>${escapeHtml(describeCheck(compliance.firewall, (active) => active === true ? 'active' : active === false ? 'inactive' : null))}</dd><dt>SSH root login</dt><dd>${escapeHtml(describeCheck(compliance.ssh?.permitRootLogin))}</dd><dt>SSH password auth</dt><dd>${escapeHtml(describeCheck(compliance.ssh?.passwordAuthentication))}</dd><dt>UAC</dt><dd>${escapeHtml(describeCheck(compliance.uac, (value) => value?.name ?? value?.level ?? value))}</dd></dl>` : ''), complianceEntry.result ?? complianceEntry.task),
+    ...extraCollectors.map(([key, title, collector, renderer, fullWidth]) => {
+      const entry = latestCollectorState(results, tasks, collector);
+      const rendered = entry.payload ? renderer(entry.payload) : '';
+      return postureCard(key, title, entry.state, postureBody(entry, rendered), entry.result ?? entry.task, { fullWidth });
+    }),
   ].join('');
 }
 
@@ -172,6 +198,38 @@ function rawPanel() {
   return `<div class="raw-grid"><details open><summary>Agent record</summary>${jsonBlock(detailData.agent)}</details><details><summary>Tasks (${detailData.tasks.length})</summary>${jsonBlock(detailData.tasks)}</details><details><summary>Results (${detailData.results.length})</summary>${jsonBlock(detailData.results)}</details><details><summary>Events (${detailData.events.length})</summary>${jsonBlock(detailData.events)}</details></div>`;
 }
 
+function missingPatchesPanel() {
+  return `<div class="missing-patches-panel">${renderMissingPatches(detailData.missingPatches ?? null)}</div>`;
+}
+
+function attachPostureTableControls() {
+  document.querySelectorAll('.posture-card').forEach((card) => {
+    const table = card.querySelector('.interactive-table');
+    if (!table) return;
+    const applyFilters = () => {
+      const query = card.querySelector('[data-table-search]')?.value.trim().toLowerCase() ?? '';
+      const status = card.querySelector('[data-table-status]')?.value ?? '';
+      table.querySelectorAll('tbody tr').forEach((row) => {
+        row.hidden = Boolean((query && !row.dataset.search?.includes(query)) || (status && row.dataset.status !== status));
+      });
+    };
+    card.querySelector('[data-table-search]')?.addEventListener('input', applyFilters);
+    card.querySelector('[data-table-status]')?.addEventListener('change', applyFilters);
+    table.querySelectorAll('th').forEach((heading, index) => {
+      let direction = 1;
+      const sort = () => {
+        const body = table.tBodies[0];
+        const rows = [...body.rows];
+        rows.sort((left, right) => left.cells[index].textContent.trim().localeCompare(right.cells[index].textContent.trim(), undefined, { numeric: true }) * direction);
+        rows.forEach((row) => body.append(row));
+        direction *= -1;
+      };
+      heading.addEventListener('click', sort);
+      heading.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') sort(); });
+    });
+  });
+}
+
 function renderDetail() {
   if (!detailData) return;
   const agent = detailData.agent;
@@ -179,11 +237,13 @@ function renderDetail() {
   $('detail').hidden = false;
   const content = viewState.tab === 'overview' ? overviewPanel()
     : viewState.tab === 'posture' ? `<div class="posture-grid">${renderPosture(detailData.results, detailData.tasks)}</div>`
-      : viewState.tab === 'activity' ? renderActivity()
-        : viewState.tab === 'results' ? resultsPanel() : rawPanel();
-  $('detail').innerHTML = `<button id="back-to-fleet" class="back-button">← Back to fleet</button><section class="detail-hero panel"><div class="endpoint-avatar large">${escapeHtml((agent.hostname || '?').slice(0, 1).toUpperCase())}</div><div><p class="eyebrow">Managed endpoint</p><h2>${escapeHtml(agent.hostname || agent.id)}</h2><p><code>${escapeHtml(agent.id)}</code> · Agent ${escapeHtml(agent.agent_version || 'version unknown')}</p></div>${statusBadge(agent.status)}</section><nav class="detail-tabs" aria-label="Agent detail"><button data-tab="overview" class="${viewState.tab === 'overview' ? 'active' : ''}">Overview</button><button data-tab="posture" class="${viewState.tab === 'posture' ? 'active' : ''}">Security posture</button><button data-tab="activity" class="${viewState.tab === 'activity' ? 'active' : ''}">Activity log</button><button data-tab="results" class="${viewState.tab === 'results' ? 'active' : ''}">Results</button><button data-tab="raw" class="${viewState.tab === 'raw' ? 'active' : ''}">Raw data</button></nav><section class="tab-content">${content}</section>`;
+      : viewState.tab === 'missing-patches' ? missingPatchesPanel()
+        : viewState.tab === 'activity' ? renderActivity()
+          : viewState.tab === 'results' ? resultsPanel() : rawPanel();
+  $('detail').innerHTML = `<button id="back-to-fleet" class="back-button">← Back to fleet</button><section class="detail-hero panel"><div class="endpoint-avatar large">${escapeHtml((agent.hostname || '?').slice(0, 1).toUpperCase())}</div><div><p class="eyebrow">Managed endpoint</p><h2>${escapeHtml(agent.hostname || agent.id)}</h2><p><code>${escapeHtml(agent.id)}</code> · Agent ${escapeHtml(agent.agent_version || 'version unknown')}</p></div>${statusBadge(agent.status)}</section><nav class="detail-tabs" aria-label="Agent detail"><button data-tab="overview" class="${viewState.tab === 'overview' ? 'active' : ''}">Overview</button><button data-tab="posture" class="${viewState.tab === 'posture' ? 'active' : ''}">Security posture</button><button data-tab="missing-patches" class="${viewState.tab === 'missing-patches' ? 'active' : ''}">Missing patches</button><button data-tab="activity" class="${viewState.tab === 'activity' ? 'active' : ''}">Activity log</button><button data-tab="results" class="${viewState.tab === 'results' ? 'active' : ''}">Results</button><button data-tab="raw" class="${viewState.tab === 'raw' ? 'active' : ''}">Raw data</button></nav><section class="tab-content">${content}</section>`;
   $('back-to-fleet').onclick = showFleet;
   document.querySelectorAll('[data-tab]').forEach((button) => { button.onclick = () => { viewState.tab = button.dataset.tab; renderDetail(); }; });
+  attachPostureTableControls();
   $('load-more-events')?.addEventListener('click', () => { viewState.eventLimit += eventPageSize; renderDetail(); });
   document.querySelectorAll('[data-event-filter]').forEach((input) => {
     input.onchange = () => {

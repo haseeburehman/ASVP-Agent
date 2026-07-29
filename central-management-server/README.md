@@ -14,7 +14,7 @@ npm.cmd --prefix .\central-management-server start
 Defaults:
 
 ```text
-API:      http://127.0.0.1:8080
+API:      http://127.0.0.1:5040
 Database: central-management-server/var/management.sqlite
 ```
 
@@ -169,7 +169,7 @@ PowerShell:
 
 ```powershell
 Invoke-RestMethod -Method Post `
-  -Uri http://127.0.0.1:8080/api/admin/tasks `
+  -Uri http://127.0.0.1:5040/api/admin/tasks `
   -Headers @{ Authorization = "Bearer $env:ADMIN_TOKEN" } `
   -ContentType application/json `
   -Body '{"agentId":null,"collectorName":"os-info","params":{}}'
@@ -211,7 +211,7 @@ This example uses separate identity/status/queue paths under `var/central-test/`
 ```powershell
 $env:ADMIN_TOKEN = "replace-with-the-same-server-admin-token"
 Invoke-RestMethod -Method Post `
-  -Uri http://127.0.0.1:8080/api/admin/tasks `
+  -Uri http://127.0.0.1:5040/api/admin/tasks `
   -Headers @{ Authorization = "Bearer $env:ADMIN_TOKEN" } `
   -ContentType application/json `
   -Body '{"agentId":null,"collectorName":"os-info","params":{}}'

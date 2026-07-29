@@ -36,7 +36,7 @@ test('new registration enqueues only the local baseline bundle and reschedules w
   assert.deepEqual(initial, [...BASELINE_COLLECTORS].sort());
   assert.equal(initial.includes('network-scan'), false); assert.equal(initial.includes('tls-checks'), false);
   await api.post('/api/agents/tasks/poll').set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId, machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
-  assert.equal(database.prepare('SELECT COUNT(*) count FROM tasks WHERE agent_id = ?').get(identity.agentId).count, 5);
+  assert.equal(database.prepare('SELECT COUNT(*) count FROM tasks WHERE agent_id = ?').get(identity.agentId).count, BASELINE_COLLECTORS.length);
   clock = new Date('2026-01-01T00:01:01.000Z');
   const recurring = await api.post('/api/agents/tasks/poll').set('Authorization', `Bearer ${identity.authToken}`).send({ agentId: identity.agentId, machineFingerprint: MACHINE_FINGERPRINT }).expect(200);
   assert.deepEqual(recurring.body.map((task) => task.collectorName).sort(), [...BASELINE_COLLECTORS].sort());

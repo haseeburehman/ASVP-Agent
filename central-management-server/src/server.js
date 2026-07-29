@@ -6,7 +6,7 @@ import { createFleetWebSocketHub } from './fleet-websocket.js';
 import { createPatchFeedCache, DEFAULT_PATCH_FEED_REFRESH_INTERVAL_MS } from './vulnerability/patch-feed-cache.js';
 
 const host = process.env.ASVP_SERVER_HOST ?? '127.0.0.1';
-const port = Number(process.env.ASVP_SERVER_PORT ?? 8080);
+const port = Number(process.env.ASVP_SERVER_PORT ?? 5040);
 const databasePath = process.env.ASVP_DATABASE_PATH ?? 'var/management.sqlite';
 const configuredAdminToken = process.env.ADMIN_TOKEN;
 const adminToken = configuredAdminToken || randomBytes(32).toString('base64url');

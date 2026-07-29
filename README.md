@@ -291,7 +291,7 @@ Status is computed at read time. With the default expected heartbeat interval of
 To require enrollment tokens for new registrations, set `REQUIRE_ENROLLMENT_TOKEN=true` (default is `false`). Create a token with the admin bearer credential:
 
 ```sh
-curl -X POST http://127.0.0.1:8080/api/admin/enrollment-tokens \
+curl -X POST http://127.0.0.1:5040/api/admin/enrollment-tokens \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
   -d '{"expiresInHours":24,"maxUses":1}'
 ```

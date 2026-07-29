@@ -10,7 +10,23 @@ import { createNormalizationWorker } from './vulnerability/worker.js';
 import { canonicalizeTaskParams, deriveTaskSigningKey, signTaskEnvelope } from '../../src/security/task-envelope.js';
 
 const dashboardRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', 'dashboard');
-export const BASELINE_COLLECTORS = Object.freeze(['os-info', 'apps', 'compliance-checks', 'users-groups', 'antivirus-status']);
+export const BASELINE_COLLECTORS = Object.freeze([
+  'os-info',
+  'apps',
+  'compliance-checks',
+  'users-groups',
+  'antivirus-status',
+  'disk-security',
+  'hardware-info',
+  'kernel-hardening',
+  'services',
+  'process-summary',
+  'file-permissions',
+  'credential-exposure',
+  'network-config',
+  'containers',
+  'sca-deps',
+]);
 function httpError(status, message, code) { const error = new Error(message); error.status = status; error.code = code; return error; }
 function requireString(value, name) { if (typeof value !== 'string' || !value.trim()) throw httpError(400, `${name} must be a non-empty string`); return value.trim(); }
 function requireObject(value, name) { if (!value || typeof value !== 'object' || Array.isArray(value)) throw httpError(400, `${name} must be an object`); return value; }

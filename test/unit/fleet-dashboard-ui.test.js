@@ -13,12 +13,18 @@ test('fleet dashboard provides search, sorting, health visualization, and detail
   assert.match(html, /id="agent-search"/);
   assert.match(html, /id="agent-sort"/);
   assert.match(script, /conic-gradient/);
-  for (const tab of ['overview', 'posture', 'activity', 'results', 'raw']) {
+  for (const tab of ['overview', 'posture', 'missing-patches', 'activity', 'results', 'raw']) {
     assert.match(script, new RegExp(`data-tab="${tab}"`));
   }
   assert.match(css, /\.status-badge\.online/);
   assert.match(css, /@media\(max-width:760px\)/);
   assert.match(css, /animation:pulse/);
+  assert.match(css, /\.posture-card\.full-width/);
+  assert.match(css, /\.security-pill\.danger/);
+  assert.match(script, /Running services/);
+  assert.match(script, /Process security/);
+  assert.match(script, /attachPostureTableControls/);
+  assert.match(script, /View raw JSON/);
 });
 
 test('activity log collapses routine noise and bounds meaningful events', async () => {
