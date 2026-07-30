@@ -55,7 +55,10 @@ test('systemd unit uses directive-appropriate path syntax, hardening, and no cap
   assert.match(unit, /NoNewPrivileges=true/);
   assert.match(unit, /ReadWritePaths="\/opt\/asvp-agent\/var"/);
   assert.match(unit, /CapabilityBoundingSet=\nAmbientCapabilities=/);
-  assert.match(unit, /RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6/);
+  assert.equal(
+    systemdDirective(unit, 'RestrictAddressFamilies'),
+    'AF_UNIX AF_INET AF_INET6 AF_NETLINK',
+  );
 });
 
 test('WinSW XML runs node under LocalService with restart backoff and rolling logs', () => {
