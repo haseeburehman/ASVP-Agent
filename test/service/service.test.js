@@ -32,10 +32,22 @@ test('uninstall deregistration is authenticated and best-effort', async () => {
   assert.match(unreachable.reason, /network down/);
 });
 
-test('systemd unit uses the foreground entry point, absolute config, hardening, and no capabilities', () => {
+function systemdDirective(unit, name) {
+  const line = unit.split('\n').find((candidate) => candidate.startsWith(`${name}=`));
+  assert.ok(line, `Missing systemd directive ${name}`);
+  return line.slice(name.length + 1);
+}
+
+test('systemd unit uses directive-appropriate path syntax, hardening, and no capabilities', () => {
   const unit = generateSystemdUnit(posixPaths);
-  assert.match(unit, /ExecStart="\/usr\/bin\/node" "\/opt\/asvp-agent\/bin\/asvp-agent\.js" "--config" "\/etc\/asvp-agent\/config\.json" "run"/);
-  assert.match(unit, /WorkingDirectory="\/opt\/asvp-agent"/);
+  const workingDirectory = systemdDirective(unit, 'WorkingDirectory');
+  const execStart = systemdDirective(unit, 'ExecStart');
+  const readWritePaths = systemdDirective(unit, 'ReadWritePaths');
+  assert.equal(workingDirectory, '/opt/asvp-agent');
+  assert.ok(workingDirectory.startsWith('/'), 'WorkingDirectory must be an unquoted absolute path');
+  assert.equal(workingDirectory.startsWith('"'), false, 'WorkingDirectory must not begin with a literal quote');
+  assert.equal(execStart, '"/usr/bin/node" "/opt/asvp-agent/bin/asvp-agent.js" "--config" "/etc/asvp-agent/config.json" "run"');
+  assert.equal(readWritePaths, '"/opt/asvp-agent/var"');
   assert.match(unit, /Restart=on-failure\nRestartSec=10s/);
   assert.match(unit, /StartLimitIntervalSec=300\nStartLimitBurst=5/);
   assert.match(unit, /ProtectSystem=strict/);
